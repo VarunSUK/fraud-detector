@@ -1,0 +1,224 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "ML Model Performance",
+    "tags": ["fraud", "detection", "ml", "performance"],
+    "style": "dark",
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Model Accuracy",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "fraud_detection_model_accuracy",
+            "legendFormat": "Accuracy"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 0.8},
+                {"color": "green", "value": 0.95}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Model AUC",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "fraud_detection_model_auc",
+            "legendFormat": "AUC"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 0.8},
+                {"color": "green", "value": 0.9}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Model Precision",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "fraud_detection_model_precision",
+            "legendFormat": "Precision"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 0.7},
+                {"color": "green", "value": 0.9}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0}
+      },
+      {
+        "id": 4,
+        "title": "Model Recall",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "fraud_detection_model_recall",
+            "legendFormat": "Recall"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 0.7},
+                {"color": "green", "value": 0.9}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0}
+      },
+      {
+        "id": 5,
+        "title": "Model Performance Over Time",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "fraud_detection_model_accuracy",
+            "legendFormat": "Accuracy"
+          },
+          {
+            "expr": "fraud_detection_model_auc",
+            "legendFormat": "AUC"
+          },
+          {
+            "expr": "fraud_detection_model_precision",
+            "legendFormat": "Precision"
+          },
+          {
+            "expr": "fraud_detection_model_recall",
+            "legendFormat": "Recall"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 6,
+        "title": "Prediction Distribution by Model",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "sum by (model) (rate(fraud_detection_predictions_total[5m]))",
+            "legendFormat": "{{model}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 7,
+        "title": "Fraud Detection Rate",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(fraud_detection_predictions_total{prediction=\"1\"}[5m])",
+            "legendFormat": "Fraud Rate/sec"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 8,
+        "title": "Model Load Time",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "fraud_detection_model_load_time_seconds",
+            "legendFormat": "Load Time"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 10},
+                {"color": "red", "value": 30}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}
+
+

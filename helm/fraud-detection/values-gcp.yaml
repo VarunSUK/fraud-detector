@@ -1,0 +1,155 @@
+# GCP GKE specific configuration
+cloud:
+  provider: "gcp"
+  region: "us-central1"
+  cluster:
+    name: "fraud-detection-gke"
+  
+  gcp:
+    gke:
+      clusterName: "fraud-detection-gke"
+      zone: "us-central1-a"
+      nodePoolName: "fraud-detection-pool"
+      machineType: "e2-standard-4"
+      minNodeCount: 2
+      maxNodeCount: 10
+      initialNodeCount: 3
+      diskSize: 100
+      diskType: "pd-ssd"
+    gcs:
+      bucket: "fraud-detection-models-${GCP_PROJECT_ID}"
+      location: "us-central1"
+    workloadIdentity:
+      serviceAccount: "fraud-detection@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    loadBalancer:
+      type: "LoadBalancer"
+      annotations:
+        cloud.google.com/load-balancer-type: "External"
+
+# GCP specific storage classes
+persistence:
+  enabled: true
+  storageClass: "standard-rwo"
+  accessModes:
+    - ReadWriteOnce
+  size:
+    models: 20Gi
+    data: 50Gi
+
+# GCP specific node selector
+nodeSelector:
+  cloud.google.com/machine-family: "e2"
+
+# GCP specific tolerations for preemptible nodes
+tolerations:
+  - key: "cloud.google.com/gke-preemptible"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+
+# GCP specific affinity for zone distribution
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - fraud-detection
+        topologyKey: topology.kubernetes.io/zone
+
+# GCP specific resource limits
+mlTraining:
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 16Gi  # GCP has more memory available
+    requests:
+      cpu: 2000m
+      memory: 8Gi
+
+inferenceAPI:
+  replicaCount: 3
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 8Gi
+    requests:
+      cpu: 1000m
+      memory: 4Gi
+
+# GCP specific ingress configuration
+inferenceAPI:
+  ingress:
+    enabled: true
+    className: "gce"
+    annotations:
+      kubernetes.io/ingress.class: "gce"
+      kubernetes.io/ingress.global-static-ip-name: "fraud-detection-ip"
+      networking.gke.io/managed-certificates: "fraud-detection-ssl-cert"
+      kubernetes.io/ingress.allow-http: "false"
+    hosts:
+      - host: fraud-detection.${GCP_DOMAIN}
+        paths:
+          - path: /
+            pathType: Prefix
+
+# GCP specific monitoring configuration
+monitoring:
+  prometheus:
+    server:
+      persistentVolume:
+        enabled: true
+        size: 100Gi
+        storageClass: "standard-rwo"
+      resources:
+        limits:
+          cpu: 4000m
+          memory: 8Gi
+        requests:
+          cpu: 2000m
+          memory: 4Gi
+
+# GCP specific Kafka configuration
+kafka:
+  enabled: true
+  replicaCount: 3
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: "standard-rwo"
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+
+# GCP specific Redis configuration
+redis:
+  enabled: true
+  master:
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: "standard-rwo"
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+
+# GCP specific service account configuration
+serviceAccount:
+  create: true
+  annotations:
+    iam.gke.io/gcp-service-account: fraud-detection@${GCP_PROJECT_ID}.iam.gserviceaccount.com
+
+

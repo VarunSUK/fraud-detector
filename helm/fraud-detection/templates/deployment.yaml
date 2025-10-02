@@ -1,0 +1,167 @@
+{{- if .Values.mlTraining.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-ml-training
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: ml-training
+spec:
+  replicas: {{ .Values.mlTraining.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: ml-training
+  template:
+    metadata:
+      labels:
+        {{- include "fraud-detection.selectorLabels" . | nindent 8 }}
+        component: ml-training
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "fraud-detection.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ml-training
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.mlTraining.image.repository }}:{{ .Values.mlTraining.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.mlTraining.image.pullPolicy }}
+          command: {{- toYaml .Values.mlTraining.command | nindent 10 }}
+          env:
+            {{- toYaml .Values.mlTraining.env | nindent 12 }}
+          resources:
+            {{- toYaml .Values.mlTraining.resources | nindent 12 }}
+          volumeMounts:
+            {{- toYaml .Values.mlTraining.volumeMounts | nindent 12 }}
+      volumes:
+        {{- toYaml .Values.mlTraining.volumes | nindent 8 }}
+{{- end }}
+
+---
+{{- if .Values.inferenceAPI.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-inference-api
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: inference-api
+spec:
+  replicas: {{ .Values.inferenceAPI.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: inference-api
+  template:
+    metadata:
+      labels:
+        {{- include "fraud-detection.selectorLabels" . | nindent 8 }}
+        component: inference-api
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "fraud-detection.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: inference-api
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.inferenceAPI.image.repository }}:{{ .Values.inferenceAPI.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.inferenceAPI.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            {{- toYaml .Values.inferenceAPI.env | nindent 12 }}
+          {{- if .Values.inferenceAPI.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.inferenceAPI.healthCheck.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.inferenceAPI.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.inferenceAPI.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.inferenceAPI.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.inferenceAPI.livenessProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.inferenceAPI.healthCheck.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.inferenceAPI.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.inferenceAPI.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.inferenceAPI.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.inferenceAPI.readinessProbe.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.inferenceAPI.resources | nindent 12 }}
+          volumeMounts:
+            {{- toYaml .Values.inferenceAPI.volumeMounts | nindent 12 }}
+      volumes:
+        {{- toYaml .Values.inferenceAPI.volumes | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+---
+{{- if .Values.dataGenerator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-data-generator
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: data-generator
+spec:
+  replicas: {{ .Values.dataGenerator.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: data-generator
+  template:
+    metadata:
+      labels:
+        {{- include "fraud-detection.selectorLabels" . | nindent 8 }}
+        component: data-generator
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "fraud-detection.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: data-generator
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.dataGenerator.image.repository }}:{{ .Values.dataGenerator.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.dataGenerator.image.pullPolicy }}
+          command: {{- toYaml .Values.dataGenerator.command | nindent 10 }}
+          env:
+            {{- toYaml .Values.dataGenerator.env | nindent 12 }}
+          resources:
+            {{- toYaml .Values.dataGenerator.resources | nindent 12 }}
+          volumeMounts:
+            {{- toYaml .Values.dataGenerator.volumeMounts | nindent 12 }}
+      volumes:
+        {{- toYaml .Values.dataGenerator.volumes | nindent 8 }}
+{{- end }}
+

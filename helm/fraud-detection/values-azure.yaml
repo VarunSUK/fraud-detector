@@ -1,0 +1,154 @@
+# Azure AKS specific configuration
+cloud:
+  provider: "azure"
+  region: "eastus"
+  cluster:
+    name: "fraud-detection-aks"
+  
+  azure:
+    aks:
+      clusterName: "fraud-detection-aks"
+      resourceGroup: "fraud-detection-rg"
+      nodePoolName: "frauddetectionpool"
+      vmSize: "Standard_D4s_v3"
+      minCount: 2
+      maxCount: 10
+      nodeCount: 3
+      osDiskSizeGB: 128
+      osDiskType: "Premium_LRS"
+    blob:
+      container: "fraud-detection-models"
+      storageAccount: "frauddetection${RANDOM_SUFFIX}"
+    managedIdentity:
+      clientId: "${AZURE_MANAGED_IDENTITY_CLIENT_ID}"
+    loadBalancer:
+      type: "LoadBalancer"
+      annotations:
+        service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+
+# Azure specific storage classes
+persistence:
+  enabled: true
+  storageClass: "managed-premium"
+  accessModes:
+    - ReadWriteOnce
+  size:
+    models: 20Gi
+    data: 50Gi
+
+# Azure specific node selector
+nodeSelector:
+  kubernetes.azure.com/vm-size: "Standard_D4s_v3"
+
+# Azure specific tolerations for spot instances
+tolerations:
+  - key: "kubernetes.azure.com/scalesetpriority"
+    operator: "Equal"
+    value: "spot"
+    effect: "NoSchedule"
+
+# Azure specific affinity for zone distribution
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - fraud-detection
+        topologyKey: topology.kubernetes.io/zone
+
+# Azure specific resource limits
+mlTraining:
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 14Gi  # Azure D4s_v3 has 16GB RAM
+    requests:
+      cpu: 2000m
+      memory: 7Gi
+
+inferenceAPI:
+  replicaCount: 3
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 7Gi
+    requests:
+      cpu: 1000m
+      memory: 3.5Gi
+
+# Azure specific ingress configuration
+inferenceAPI:
+  ingress:
+    enabled: true
+    className: "azure/application-gateway"
+    annotations:
+      kubernetes.io/ingress.class: "azure/application-gateway"
+      appgw.ingress.kubernetes.io/ssl-redirect: "true"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    hosts:
+      - host: fraud-detection.${AZURE_DOMAIN}
+        paths:
+          - path: /
+            pathType: Prefix
+
+# Azure specific monitoring configuration
+monitoring:
+  prometheus:
+    server:
+      persistentVolume:
+        enabled: true
+        size: 100Gi
+        storageClass: "managed-premium"
+      resources:
+        limits:
+          cpu: 4000m
+          memory: 8Gi
+        requests:
+          cpu: 2000m
+          memory: 4Gi
+
+# Azure specific Kafka configuration
+kafka:
+  enabled: true
+  replicaCount: 3
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: "managed-premium"
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+
+# Azure specific Redis configuration
+redis:
+  enabled: true
+  master:
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: "managed-premium"
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+
+# Azure specific service account configuration
+serviceAccount:
+  create: true
+  annotations:
+    azure.workload.identity/client-id: "${AZURE_MANAGED_IDENTITY_CLIENT_ID}"
+
+

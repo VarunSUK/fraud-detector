@@ -1,0 +1,72 @@
+{{- if .Values.inferenceAPI.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-inference-api
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: inference-api
+  {{- if and .Values.monitoring.enabled .Values.inferenceAPI.enabled }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+  {{- end }}
+spec:
+  type: {{ .Values.inferenceAPI.service.type }}
+  ports:
+    - port: {{ .Values.inferenceAPI.service.port }}
+      targetPort: {{ .Values.inferenceAPI.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "fraud-detection.selectorLabels" . | nindent 4 }}
+    component: inference-api
+{{- end }}
+
+---
+{{- if and .Values.kafka.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-kafka
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: kafka
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9092
+      targetPort: 9092
+      protocol: TCP
+      name: kafka
+    - port: 9101
+      targetPort: 9101
+      protocol: TCP
+      name: jmx
+  selector:
+    {{- include "fraud-detection.selectorLabels" . | nindent 4 }}
+    component: kafka
+{{- end }}
+
+---
+{{- if and .Values.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-redis
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+  selector:
+    {{- include "fraud-detection.selectorLabels" . | nindent 4 }}
+    component: redis
+{{- end }}
+

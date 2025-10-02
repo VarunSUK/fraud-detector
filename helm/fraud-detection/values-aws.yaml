@@ -1,0 +1,151 @@
+# AWS EKS specific configuration
+cloud:
+  provider: "aws"
+  region: "us-west-2"
+  cluster:
+    name: "fraud-detection-eks"
+  
+  aws:
+    eks:
+      clusterName: "fraud-detection-eks"
+      nodeGroupName: "fraud-detection-nodes"
+      nodeInstanceType: "t3.medium"
+      minNodes: 2
+      maxNodes: 10
+      desiredNodes: 3
+    s3:
+      bucket: "fraud-detection-models-${AWS_ACCOUNT_ID}"
+      region: "us-west-2"
+    iam:
+      serviceAccount: "fraud-detection-sa"
+      roleArn: "arn:aws:iam::${AWS_ACCOUNT_ID}:role/fraud-detection-role"
+    loadBalancer:
+      type: "nlb"
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+        service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+
+# AWS specific storage classes
+persistence:
+  enabled: true
+  storageClass: "gp3"
+  accessModes:
+    - ReadWriteOnce
+  size:
+    models: 20Gi
+    data: 50Gi
+
+# AWS EKS optimized node selector
+nodeSelector:
+  node.kubernetes.io/instance-type: "t3.medium"
+
+# AWS specific tolerations for spot instances
+tolerations:
+  - key: "eks.amazonaws.com/capacityType"
+    operator: "Equal"
+    value: "SPOT"
+    effect: "NoSchedule"
+
+# AWS specific affinity for zone distribution
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - fraud-detection
+        topologyKey: topology.kubernetes.io/zone
+
+# AWS specific resource limits
+mlTraining:
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+    requests:
+      cpu: 2000m
+      memory: 4Gi
+
+inferenceAPI:
+  replicaCount: 5  # Higher replica count for AWS
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+
+# AWS specific ingress configuration
+inferenceAPI:
+  ingress:
+    enabled: true
+    className: "alb"
+    annotations:
+      kubernetes.io/ingress.class: alb
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/load-balancer-name: fraud-detection-alb
+      alb.ingress.kubernetes.io/ssl-redirect: '443'
+      alb.ingress.kubernetes.io/certificate-arn: ${AWS_CERTIFICATE_ARN}
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS":443}]'
+    hosts:
+      - host: fraud-detection.${AWS_DOMAIN}
+        paths:
+          - path: /
+            pathType: Prefix
+
+# AWS specific monitoring configuration
+monitoring:
+  prometheus:
+    server:
+      persistentVolume:
+        enabled: true
+        size: 100Gi
+        storageClass: "gp3"
+      resources:
+        limits:
+          cpu: 4000m
+          memory: 8Gi
+        requests:
+          cpu: 2000m
+          memory: 4Gi
+
+# AWS specific Kafka configuration
+kafka:
+  enabled: true
+  replicaCount: 3  # Multi-AZ setup
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: "gp3"
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+
+# AWS specific Redis configuration
+redis:
+  enabled: true
+  master:
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 20Gi
+      storageClass: "gp3"
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+
+

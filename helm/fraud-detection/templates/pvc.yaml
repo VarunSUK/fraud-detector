@@ -1,0 +1,41 @@
+{{- if .Values.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ml-models-pvc
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: models
+spec:
+  accessModes:
+    {{- range .Values.persistence.accessModes }}
+    - {{ . | quote }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size.models | quote }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ml-data-pvc
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: data
+spec:
+  accessModes:
+    {{- range .Values.persistence.accessModes }}
+    - {{ . | quote }}
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size.data | quote }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}
+
+

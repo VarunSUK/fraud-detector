@@ -1,0 +1,182 @@
+version: '3.8'
+
+services:
+  # Kafka for message streaming
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - fraud-detection
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+    networks:
+      - fraud-detection
+
+  # Redis for caching and streaming
+  redis:
+    image: redis:7-alpine
+    hostname: redis
+    container_name: redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - fraud-detection
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    hostname: prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - fraud-detection
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:10.1.0
+    hostname: grafana
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - fraud-detection
+
+  # Python ML Training Service
+  ml-training:
+    build:
+      context: ./python-ml
+      dockerfile: Dockerfile
+      target: production
+    hostname: ml-training
+    container_name: ml-training
+    environment:
+      - PYTHONPATH=/app/src
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./python-ml:/app
+      - ./creditcard.csv:/app/data/creditcard.csv
+      - ml_models:/app/models
+      - ml_output:/app/output
+    command: ["python", "train.py", "--data-file", "/app/data/creditcard.csv", "--dataset-type", "creditcard", "--sample-size", "10000"]
+    networks:
+      - fraud-detection
+
+  # Go Inference Service
+  inference-api:
+    build:
+      context: ./go-inference
+      dockerfile: Dockerfile
+    hostname: inference-api
+    container_name: inference-api
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - MODELS_DIR=/app/models
+      - LOG_LEVEL=info
+      - VERSION=1.0.0
+    volumes:
+      - ml_models:/app/models
+    depends_on:
+      - ml-training
+    networks:
+      - fraud-detection
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Data Generator Service
+  data-generator:
+    build:
+      context: ./data-generator
+      dockerfile: Dockerfile
+      target: production
+    hostname: data-generator
+    container_name: data-generator
+    environment:
+      - PYTHONPATH=/app/src
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./creditcard.csv:/app/data/creditcard.csv
+    depends_on:
+      - kafka
+      - redis
+    networks:
+      - fraud-detection
+    command: ["python", "src/stream_producer.py", "--csv-file", "/app/data/creditcard.csv", "--kafka", "--redis", "--sample-rate", "0.01", "--delay", "0.1"]
+
+  # Kafka UI for monitoring (optional)
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    hostname: kafka-ui
+    container_name: kafka-ui
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    depends_on:
+      - kafka
+    networks:
+      - fraud-detection
+
+volumes:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  ml_models:
+  ml_output:
+
+networks:
+  fraud-detection:
+    driver: bridge

@@ -1,0 +1,21 @@
+{{- if and .Values.monitoring.enabled .Values.inferenceAPI.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-inference-api
+  namespace: {{ .Values.monitoring.namespace }}
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: inference-api
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+{{- end }}
+

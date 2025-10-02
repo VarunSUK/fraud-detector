@@ -1,0 +1,15 @@
+# Data streaming dependencies
+kafka-python==2.0.2
+redis==5.0.1
+
+# Data processing
+pandas==2.1.4
+numpy==1.24.4
+
+# Utilities
+python-dotenv==1.0.0
+click==8.1.7
+structlog==23.2.0
+
+# Development
+pytest==7.4.3

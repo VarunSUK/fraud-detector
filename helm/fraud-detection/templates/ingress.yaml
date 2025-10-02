@@ -1,0 +1,88 @@
+{{- if and .Values.inferenceAPI.enabled .Values.inferenceAPI.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-inference-api
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: inference-api
+  {{- with .Values.inferenceAPI.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.inferenceAPI.ingress.className }}
+  ingressClassName: {{ .Values.inferenceAPI.ingress.className }}
+  {{- end }}
+  {{- if .Values.inferenceAPI.ingress.tls }}
+  tls:
+    {{- range .Values.inferenceAPI.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.inferenceAPI.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "fraud-detection.fullname" $ }}-inference-api
+                port:
+                  number: {{ $.Values.inferenceAPI.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}
+
+---
+{{- if and .Values.monitoring.grafana.enabled .Values.monitoring.grafana.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-grafana
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: grafana
+  {{- with .Values.monitoring.grafana.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.monitoring.grafana.ingress.className }}
+  ingressClassName: {{ .Values.monitoring.grafana.ingress.className }}
+  {{- end }}
+  {{- if .Values.monitoring.grafana.ingress.tls }}
+  tls:
+    {{- range .Values.monitoring.grafana.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.monitoring.grafana.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "fraud-detection.fullname" $ }}-grafana
+                port:
+                  number: {{ $.Values.monitoring.grafana.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}
+
+
