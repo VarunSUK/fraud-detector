@@ -1,9 +1,11 @@
 package ml
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,23 +36,23 @@ func NewRuleBasedPredictor(logger *logrus.Logger) *RuleBasedPredictor {
 // Predict implements rule-based fraud detection
 func (r *RuleBasedPredictor) Predict(transaction *models.Transaction) (float64, int, error) {
 	score := 0.0
-	
+
 	// Rule 1: High amount transactions
 	if transaction.Amount > 10000 {
 		score += 0.3
 	}
-	
+
 	// Rule 2: Very high amount transactions
 	if transaction.Amount > 50000 {
 		score += 0.4
 	}
-	
+
 	// Rule 3: Unusual time (night transactions)
 	hour := int(transaction.Time/3600) % 24
 	if hour < 6 || hour > 22 {
 		score += 0.2
 	}
-	
+
 	// Rule 4: High PCA feature values (anomaly detection)
 	pcaFeatures := []float64{
 		transaction.V1, transaction.V2, transaction.V3, transaction.V4, transaction.V5,
@@ -60,24 +62,24 @@ func (r *RuleBasedPredictor) Predict(transaction *models.Transaction) (float64, 
 		transaction.V21, transaction.V22, transaction.V23, transaction.V24, transaction.V25,
 		transaction.V26, transaction.V27, transaction.V28,
 	}
-	
+
 	// Check for extreme PCA values
 	for _, v := range pcaFeatures {
 		if v > 3 || v < -3 { // More than 3 standard deviations
 			score += 0.1
 		}
 	}
-	
+
 	// Normalize score to 0-1 range
 	if score > 1.0 {
 		score = 1.0
 	}
-	
+
 	prediction := 0
 	if score > 0.5 {
 		prediction = 1
 	}
-	
+
 	return score, prediction, nil
 }
 
@@ -87,9 +89,9 @@ func (r *RuleBasedPredictor) Explain(transaction *models.Transaction) (*models.E
 	if err != nil {
 		return nil, err
 	}
-	
+
 	contributions := []models.FeatureContribution{}
-	
+
 	// Amount contribution
 	if transaction.Amount > 10000 {
 		contributions = append(contributions, models.FeatureContribution{
@@ -99,7 +101,7 @@ func (r *RuleBasedPredictor) Explain(transaction *models.Transaction) (*models.E
 			Contribution: 0.3,
 		})
 	}
-	
+
 	// Time contribution
 	hour := int(transaction.Time/3600) % 24
 	if hour < 6 || hour > 22 {
@@ -110,7 +112,7 @@ func (r *RuleBasedPredictor) Explain(transaction *models.Transaction) (*models.E
 			Contribution: 0.2,
 		})
 	}
-	
+
 	// PCA anomaly contribution
 	pcaFeatures := []float64{
 		transaction.V1, transaction.V2, transaction.V3, transaction.V4, transaction.V5,
@@ -120,14 +122,14 @@ func (r *RuleBasedPredictor) Explain(transaction *models.Transaction) (*models.E
 		transaction.V21, transaction.V22, transaction.V23, transaction.V24, transaction.V25,
 		transaction.V26, transaction.V27, transaction.V28,
 	}
-	
+
 	anomalyCount := 0
 	for _, v := range pcaFeatures {
 		if v > 3 || v < -3 {
 			anomalyCount++
 		}
 	}
-	
+
 	if anomalyCount > 0 {
 		contributions = append(contributions, models.FeatureContribution{
 			Feature:      "pca_anomalies",
@@ -136,7 +138,7 @@ func (r *RuleBasedPredictor) Explain(transaction *models.Transaction) (*models.E
 			Contribution: float64(anomalyCount) * 0.1,
 		})
 	}
-	
+
 	return &models.ExplainResponse{
 		TransactionID:        transaction.TransactionID,
 		Score:                score,
@@ -151,8 +153,8 @@ func (r *RuleBasedPredictor) Explain(transaction *models.Transaction) (*models.E
 // GetModelInfo returns information about the rule-based model
 func (r *RuleBasedPredictor) GetModelInfo() *models.ModelInfo {
 	return &models.ModelInfo{
-		Name: "rule_based",
-		Type: "rule_based",
+		Name:     "rule_based",
+		Type:     "rule_based",
 		Features: []string{"amount", "time", "pca_features"},
 		Metrics: map[string]float64{
 			"accuracy": 0.85, // Estimated accuracy
@@ -187,10 +189,10 @@ func NewEnsemblePredictor(logger *logrus.Logger) *EnsemblePredictor {
 func (e *EnsemblePredictor) AddPredictor(predictor Predictor, weight float64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	
+
 	e.predictors = append(e.predictors, predictor)
 	e.weights = append(e.weights, weight)
-	
+
 	e.logger.WithFields(logrus.Fields{
 		"predictor": predictor.GetModelInfo().Name,
 		"weight":    weight,
@@ -201,39 +203,39 @@ func (e *EnsemblePredictor) AddPredictor(predictor Predictor, weight float64) {
 func (e *EnsemblePredictor) Predict(transaction *models.Transaction) (float64, int, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	
+
 	if len(e.predictors) == 0 {
 		return 0.0, 0, fmt.Errorf("no predictors in ensemble")
 	}
-	
+
 	var totalScore float64
 	var totalWeight float64
-	
+
 	for i, predictor := range e.predictors {
 		if !predictor.IsLoaded() {
 			continue
 		}
-		
+
 		score, _, err := predictor.Predict(transaction)
 		if err != nil {
 			e.logger.WithError(err).WithField("predictor", i).Warn("Predictor failed")
 			continue
 		}
-		
+
 		totalScore += score * e.weights[i]
 		totalWeight += e.weights[i]
 	}
-	
+
 	if totalWeight == 0 {
 		return 0.0, 0, fmt.Errorf("no valid predictions")
 	}
-	
+
 	finalScore := totalScore / totalWeight
 	prediction := 0
 	if finalScore > 0.5 {
 		prediction = 1
 	}
-	
+
 	return finalScore, prediction, nil
 }
 
@@ -241,14 +243,15 @@ func (e *EnsemblePredictor) Predict(transaction *models.Transaction) (float64, i
 func (e *EnsemblePredictor) Explain(transaction *models.Transaction) (*models.ExplainResponse, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	
-	// For now, use the first loaded predictor for explanation
-	for _, predictor := range e.predictors {
-		if predictor.IsLoaded() {
-			return predictor.Explain(transaction)
+
+	// Prefer the most recently added (highest-fidelity) loaded predictor, e.g. the
+	// real ML service over the rule-based fallback, which is added first.
+	for i := len(e.predictors) - 1; i >= 0; i-- {
+		if e.predictors[i].IsLoaded() {
+			return e.predictors[i].Explain(transaction)
 		}
 	}
-	
+
 	return nil, fmt.Errorf("no loaded predictors for explanation")
 }
 
@@ -256,14 +259,14 @@ func (e *EnsemblePredictor) Explain(transaction *models.Transaction) (*models.Ex
 func (e *EnsemblePredictor) GetModelInfo() *models.ModelInfo {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	
+
 	var modelNames []string
 	for _, predictor := range e.predictors {
 		if predictor.IsLoaded() {
 			modelNames = append(modelNames, predictor.GetModelInfo().Name)
 		}
 	}
-	
+
 	return &models.ModelInfo{
 		Name:     "ensemble",
 		Type:     "ensemble",
@@ -279,7 +282,7 @@ func (e *EnsemblePredictor) GetModelInfo() *models.ModelInfo {
 func (e *EnsemblePredictor) IsLoaded() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	
+
 	for _, predictor := range e.predictors {
 		if predictor.IsLoaded() {
 			return true
@@ -290,18 +293,20 @@ func (e *EnsemblePredictor) IsLoaded() bool {
 
 // ModelManager manages multiple ML models
 type ModelManager struct {
-	models     map[string]Predictor
-	logger     *logrus.Logger
-	modelsDir  string
-	mu         sync.RWMutex
+	models       map[string]Predictor
+	logger       *logrus.Logger
+	modelsDir    string
+	mlServiceURL string
+	mu           sync.RWMutex
 }
 
 // NewModelManager creates a new model manager
-func NewModelManager(logger *logrus.Logger, modelsDir string) *ModelManager {
+func NewModelManager(logger *logrus.Logger, modelsDir string, mlServiceURL string) *ModelManager {
 	return &ModelManager{
-		models:    make(map[string]Predictor),
-		logger:    logger,
-		modelsDir: modelsDir,
+		models:       make(map[string]Predictor),
+		logger:       logger,
+		modelsDir:    modelsDir,
+		mlServiceURL: mlServiceURL,
 	}
 }
 
@@ -309,38 +314,33 @@ func NewModelManager(logger *logrus.Logger, modelsDir string) *ModelManager {
 func (m *ModelManager) LoadModels() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// Always add rule-based predictor
 	ruleBased := NewRuleBasedPredictor(m.logger)
 	m.models["rule_based"] = ruleBased
-	
+
 	// Create ensemble predictor
 	ensemble := NewEnsemblePredictor(m.logger)
 	ensemble.AddPredictor(ruleBased, 0.3)
-	
+
 	// Try to load ML models from Python training
 	if err := m.loadMLModels(ensemble); err != nil {
 		m.logger.WithError(err).Warn("Failed to load ML models, using rule-based only")
 	}
-	
+
 	m.models["ensemble"] = ensemble
-	
+
 	m.logger.WithField("num_models", len(m.models)).Info("Models loaded successfully")
 	return nil
 }
 
-// loadMLModels attempts to load ML models from Python training output
+// loadMLModels wires in the real LightGBM/XGBoost models served by the
+// Python ml-serving sidecar (see python-ml/src/serve.py). The predictor
+// degrades gracefully if the sidecar is unreachable or has no models loaded.
 func (m *ModelManager) loadMLModels(ensemble *EnsemblePredictor) error {
-	// For now, we'll implement a mock ML predictor
-	// In a real implementation, you would load the actual trained models
-	// using libraries like ONNX Runtime or similar
-	
-	mockML := &MockMLPredictor{
-		logger: m.logger,
-	}
-	
-	ensemble.AddPredictor(mockML, 0.7)
-	
+	mlService := NewMLServicePredictor(m.logger, m.mlServiceURL)
+	ensemble.AddPredictor(mlService, 0.7)
+
 	return nil
 }
 
@@ -348,7 +348,7 @@ func (m *ModelManager) loadMLModels(ensemble *EnsemblePredictor) error {
 func (m *ModelManager) GetPredictor(name string) (Predictor, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	predictor, exists := m.models[name]
 	return predictor, exists
 }
@@ -357,7 +357,7 @@ func (m *ModelManager) GetPredictor(name string) (Predictor, bool) {
 func (m *ModelManager) GetAvailableModels() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	var models []string
 	for name := range m.models {
 		models = append(models, name)
@@ -365,129 +365,163 @@ func (m *ModelManager) GetAvailableModels() []string {
 	return models
 }
 
-// MockMLPredictor is a mock ML predictor for demonstration
-type MockMLPredictor struct {
-	logger *logrus.Logger
+// mlServiceHealthCheckInterval controls how often MLServicePredictor
+// re-checks the sidecar's /health endpoint instead of hitting it on every call.
+const mlServiceHealthCheckInterval = 5 * time.Second
+
+// MLServicePredictor calls out to the Python ml-serving sidecar (see
+// python-ml/src/serve.py), which loads the real LightGBM/XGBoost models
+// trained by python-ml/train.py.
+type MLServicePredictor struct {
+	logger     *logrus.Logger
+	baseURL    string
+	httpClient *http.Client
+
+	mu              sync.RWMutex
+	healthy         bool
+	loadedModels    []string
+	lastHealthCheck time.Time
 }
 
-// Predict implements mock ML prediction
-func (m *MockMLPredictor) Predict(transaction *models.Transaction) (float64, int, error) {
-	// Simple mock prediction based on PCA features
-	score := 0.0
-	
-	// Check for anomalies in PCA features
-	pcaFeatures := []float64{
-		transaction.V1, transaction.V2, transaction.V3, transaction.V4, transaction.V5,
-		transaction.V6, transaction.V7, transaction.V8, transaction.V9, transaction.V10,
-		transaction.V11, transaction.V12, transaction.V13, transaction.V14, transaction.V15,
-		transaction.V16, transaction.V17, transaction.V18, transaction.V19, transaction.V20,
-		transaction.V21, transaction.V22, transaction.V23, transaction.V24, transaction.V25,
-		transaction.V26, transaction.V27, transaction.V28,
+// NewMLServicePredictor creates a predictor backed by the ml-serving sidecar at baseURL.
+func NewMLServicePredictor(logger *logrus.Logger, baseURL string) *MLServicePredictor {
+	p := &MLServicePredictor{
+		logger:     logger,
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
-	
-	// Calculate anomaly score
-	anomalyScore := 0.0
-	for _, v := range pcaFeatures {
-		if v > 2 || v < -2 {
-			anomalyScore += 0.1
-		}
-	}
-	
-	// Amount-based scoring
-	amountScore := 0.0
-	if transaction.Amount > 5000 {
-		amountScore = 0.3
-	}
-	if transaction.Amount > 20000 {
-		amountScore = 0.6
-	}
-	
-	score = anomalyScore + amountScore
-	if score > 1.0 {
-		score = 1.0
-	}
-	
-	prediction := 0
-	if score > 0.5 {
-		prediction = 1
-	}
-	
-	return score, prediction, nil
+	p.refreshHealth()
+	return p
 }
 
-// Explain provides mock explanation
-func (m *MockMLPredictor) Explain(transaction *models.Transaction) (*models.ExplainResponse, error) {
-	score, prediction, err := m.Predict(transaction)
+type mlServiceHealthResponse struct {
+	Status       string   `json:"status"`
+	ModelsLoaded []string `json:"models_loaded"`
+}
+
+func (p *MLServicePredictor) refreshHealth() {
+	resp, err := p.httpClient.Get(p.baseURL + "/health")
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lastHealthCheck = time.Now()
+
 	if err != nil {
-		return nil, err
+		p.logger.WithError(err).Warn("ml-service health check failed")
+		p.healthy = false
+		p.loadedModels = nil
+		return
 	}
-	
-	contributions := []models.FeatureContribution{
-		{
-			Feature:      "pca_anomaly_score",
-			Value:        0.5, // Mock value
-			Importance:   0.4,
-			Contribution: 0.4,
-		},
-		{
-			Feature:      "amount_score",
-			Value:        transaction.Amount,
-			Importance:   0.3,
-			Contribution: 0.3,
-		},
+	defer resp.Body.Close()
+
+	var health mlServiceHealthResponse
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&health) != nil {
+		p.healthy = false
+		p.loadedModels = nil
+		return
 	}
-	
+
+	p.healthy = health.Status == "healthy" && len(health.ModelsLoaded) > 0
+	p.loadedModels = health.ModelsLoaded
+}
+
+// IsLoaded reports whether the ml-serving sidecar currently has models loaded.
+func (p *MLServicePredictor) IsLoaded() bool {
+	p.mu.RLock()
+	stale := time.Since(p.lastHealthCheck) > mlServiceHealthCheckInterval
+	p.mu.RUnlock()
+
+	if stale {
+		p.refreshHealth()
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.healthy
+}
+
+type mlServicePredictResponse struct {
+	Score      float64 `json:"score"`
+	Prediction int     `json:"prediction"`
+}
+
+// Predict sends the transaction to the ml-serving sidecar's /predict endpoint.
+func (p *MLServicePredictor) Predict(transaction *models.Transaction) (float64, int, error) {
+	body, err := json.Marshal(transaction)
+	if err != nil {
+		return 0, 0, fmt.Errorf("marshal transaction: %w", err)
+	}
+
+	resp, err := p.httpClient.Post(p.baseURL+"/predict", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return 0, 0, fmt.Errorf("ml-service request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("ml-service returned status %d", resp.StatusCode)
+	}
+
+	var result mlServicePredictResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, 0, fmt.Errorf("decode ml-service response: %w", err)
+	}
+
+	return result.Score, result.Prediction, nil
+}
+
+type mlServiceExplainResponse struct {
+	Score                float64                      `json:"score"`
+	Prediction           int                          `json:"prediction"`
+	FeatureContributions []models.FeatureContribution `json:"feature_contributions"`
+	ModelScores          map[string]float64           `json:"model_scores"`
+}
+
+// Explain sends the transaction to the ml-serving sidecar's /explain endpoint.
+func (p *MLServicePredictor) Explain(transaction *models.Transaction) (*models.ExplainResponse, error) {
+	body, err := json.Marshal(transaction)
+	if err != nil {
+		return nil, fmt.Errorf("marshal transaction: %w", err)
+	}
+
+	resp, err := p.httpClient.Post(p.baseURL+"/explain", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("ml-service request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ml-service returned status %d", resp.StatusCode)
+	}
+
+	var result mlServiceExplainResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode ml-service response: %w", err)
+	}
+
 	return &models.ExplainResponse{
 		TransactionID:        transaction.TransactionID,
-		Score:                score,
-		Prediction:           prediction,
-		FeatureContributions: contributions,
-		Model:                "mock_ml",
+		Score:                result.Score,
+		Prediction:           result.Prediction,
+		FeatureContributions: result.FeatureContributions,
+		ModelScores:          result.ModelScores,
+		Model:                "ml_service",
 		Timestamp:            time.Now(),
-		ProcessingMs:         1,
 	}, nil
 }
 
-// GetModelInfo returns mock model information
-func (m *MockMLPredictor) GetModelInfo() *models.ModelInfo {
+// GetModelInfo returns information about the models currently loaded by the sidecar.
+func (p *MLServicePredictor) GetModelInfo() *models.ModelInfo {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	return &models.ModelInfo{
-		Name:     "mock_ml",
+		Name:     "ml_service",
 		Type:     "ml",
-		Features: []string{"v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "amount", "time"},
+		Features: []string{"v1..v28", "time", "amount"},
 		Metrics: map[string]float64{
-			"accuracy": 0.92,
-			"auc":      0.95,
+			"num_models_loaded": float64(len(p.loadedModels)),
 		},
-		LoadedAt: time.Now(),
+		LoadedAt: p.lastHealthCheck,
 	}
-}
-
-// IsLoaded returns true
-func (m *MockMLPredictor) IsLoaded() bool {
-	return true
-}
-
-// Helper function to check if file exists
-func fileExists(filename string) bool {
-	_, err := os.Stat(filename)
-	return !os.IsNotExist(err)
-}
-
-// Helper function to find model files
-func findModelFiles(modelsDir string) ([]string, error) {
-	var modelFiles []string
-	
-	err := filepath.Walk(modelsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		
-		if filepath.Ext(path) == ".joblib" || filepath.Ext(path) == ".json" {
-			modelFiles = append(modelFiles, path)
-		}
-		
-		return nil
-	})
-	
-	return modelFiles, err
 }

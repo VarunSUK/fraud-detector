@@ -152,3 +152,11 @@ serviceAccount:
     azure.workload.identity/client-id: "${AZURE_MANAGED_IDENTITY_CLIENT_ID}"
 
 
+
+
+
+
+
+
+
+

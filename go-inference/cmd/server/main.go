@@ -15,16 +15,17 @@ import (
 )
 
 const (
-	DefaultPort     = "8080"
-	DefaultModelsDir = "/app/models"
-	DefaultLogLevel = "info"
+	DefaultPort         = "8080"
+	DefaultModelsDir    = "/app/models"
+	DefaultLogLevel     = "info"
+	DefaultMLServiceURL = "http://localhost:8000"
 )
 
 func main() {
 	// Initialize logger
 	logger := logrus.New()
 	logger.SetFormatter(&logrus.JSONFormatter{})
-	
+
 	// Set log level
 	logLevel := getEnv("LOG_LEVEL", DefaultLogLevel)
 	level, err := logrus.ParseLevel(logLevel)
@@ -33,33 +34,35 @@ func main() {
 		level = logrus.InfoLevel
 	}
 	logger.SetLevel(level)
-	
+
 	// Get configuration
 	port := getEnv("PORT", DefaultPort)
 	modelsDir := getEnv("MODELS_DIR", DefaultModelsDir)
+	mlServiceURL := getEnv("ML_SERVICE_URL", DefaultMLServiceURL)
 	version := getEnv("VERSION", "1.0.0")
-	
+
 	logger.WithFields(logrus.Fields{
-		"port":      port,
-		"models_dir": modelsDir,
-		"version":   version,
-		"log_level": logLevel,
+		"port":           port,
+		"models_dir":     modelsDir,
+		"ml_service_url": mlServiceURL,
+		"version":        version,
+		"log_level":      logLevel,
 	}).Info("Starting fraud detection inference service")
-	
+
 	// Initialize model manager
-	modelManager := ml.NewModelManager(logger, modelsDir)
-	
+	modelManager := ml.NewModelManager(logger, modelsDir, mlServiceURL)
+
 	// Load models
 	if err := modelManager.LoadModels(); err != nil {
 		logger.WithError(err).Fatal("Failed to load models")
 	}
-	
+
 	// Initialize handlers
 	handlers := api.NewHandlers(modelManager, logger, version)
-	
+
 	// Setup router
 	router := setupRouter(handlers, logger)
-	
+
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         ":" + port,
@@ -68,7 +71,7 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
-	
+
 	// Start server in goroutine
 	go func() {
 		logger.WithField("port", port).Info("Starting HTTP server")
@@ -76,22 +79,22 @@ func main() {
 			logger.WithError(err).Fatal("Failed to start server")
 		}
 	}()
-	
+
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	
+
 	logger.Info("Shutting down server...")
-	
+
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	if err := server.Shutdown(ctx); err != nil {
 		logger.WithError(err).Fatal("Server forced to shutdown")
 	}
-	
+
 	logger.Info("Server exited")
 }
 
@@ -100,20 +103,20 @@ func setupRouter(handlers *api.Handlers, logger *logrus.Logger) *gin.Engine {
 	if gin.Mode() == gin.DebugMode {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	
+
 	router := gin.New()
-	
+
 	// Middleware
 	router.Use(gin.Recovery())
 	router.Use(api.CORSMiddleware())
 	router.Use(loggingMiddleware(logger))
-	
+
 	// Health check endpoint
 	router.GET("/health", handlers.HealthHandler)
 	router.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "pong"})
 	})
-	
+
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
@@ -122,21 +125,13 @@ func setupRouter(handlers *api.Handlers, logger *logrus.Logger) *gin.Engine {
 		v1.GET("/models", handlers.ModelsHandler)
 		v1.GET("/metrics", handlers.MetricsHandler)
 	}
-	
+
 	// Legacy routes for backward compatibility
 	router.POST("/score", handlers.ScoreHandler)
 	router.POST("/explain", handlers.ExplainHandler)
 	router.GET("/models", handlers.ModelsHandler)
 	router.GET("/metrics", handlers.MetricsHandler)
-	
-	// Prometheus metrics endpoint
-	router.GET("/metrics", func(c *gin.Context) {
-		// In a real implementation, you would use promhttp.Handler()
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Prometheus metrics endpoint",
-		})
-	})
-	
+
 	return router
 }
 
@@ -151,7 +146,7 @@ func loggingMiddleware(logger *logrus.Logger) gin.HandlerFunc {
 			"latency":    param.Latency,
 			"error":      param.ErrorMessage,
 		}).Info("HTTP request")
-		
+
 		return ""
 	})
 }
@@ -176,4 +171,3 @@ func init() {
 		os.Setenv("LOG_LEVEL", DefaultLogLevel)
 	}
 }
-

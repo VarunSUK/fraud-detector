@@ -12,15 +12,18 @@ from sklearn.metrics import (
     precision_recall_curve, roc_curve, average_precision_score
 )
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.frozen import FrozenEstimator
+from sklearn.ensemble import IsolationForest
 import lightgbm as lgb
 import xgboost as xgb
+import shap
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.pipeline import Pipeline as ImbPipeline
 import joblib
 import json
 import os
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -216,7 +219,8 @@ class FraudDetectionModel:
         self.model_type = model_type
         self.use_class_balance = use_class_balance
         self.dataset_type = dataset_type
-        self.model = None
+        self.model = None          # calibrated estimator used for predict/predict_proba
+        self.base_model = None     # raw fitted booster, used for feature importance + SHAP
         self.feature_engineer = FeatureEngineer(dataset_type=dataset_type)
         self.feature_importance = None
         self.metrics = {}
@@ -310,39 +314,55 @@ class FraudDetectionModel:
             params = self._get_default_params()
         
         # Create model
-        self.model = self._get_model(**params)
-        
+        raw_model = self._get_model(**params)
+
         # Train with early stopping
         if self.model_type == 'lightgbm':
-            self.model.fit(
+            raw_model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
                 callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)]
             )
         elif self.model_type == 'xgboost':
-            self.model.fit(
+            raw_model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
                 verbose=False
             )
-        
-        # Get feature importance
-        if hasattr(self.model, 'feature_importances_'):
+
+        self.base_model = raw_model
+
+        # Get feature importance (from the raw booster's gain-based importance)
+        if hasattr(raw_model, 'feature_importances_'):
             self.feature_importance = dict(zip(
                 self.feature_engineer.get_feature_names(),
-                self.model.feature_importances_
+                raw_model.feature_importances_
             ))
-        
+
+        # Calibrate probabilities on the held-out validation split. Raw GBM outputs
+        # are ranking scores, not well-calibrated probabilities -- fraud systems that
+        # set dollar-value risk thresholds (e.g. "auto-decline above 0.9") need
+        # predict_proba to actually mean something. The validation split wasn't used
+        # to fit raw_model's weights (only for early stopping), so it's a legitimate,
+        # if reused, calibration set.
+        try:
+            calibrated = CalibratedClassifierCV(FrozenEstimator(raw_model), method='sigmoid')
+            calibrated.fit(X_val, y_val)
+            self.model = calibrated
+        except ValueError as exc:
+            logger.warning(f"Skipping probability calibration ({exc}); using raw model output")
+            self.model = raw_model
+
         # Evaluate on test set
         y_pred_proba = self.model.predict_proba(X_test)[:, 1]
         y_pred = self.model.predict(X_test)
-        
+
         # Calculate metrics
         self.metrics = self._calculate_metrics(y_test, y_pred, y_pred_proba)
-        
+
         logger.info(f"Test AUC: {self.metrics['auc']:.4f}")
         logger.info(f"Test AP: {self.metrics['average_precision']:.4f}")
-        
+
         return self.metrics
     
     def _calculate_metrics(self, y_true: np.ndarray, y_pred: np.ndarray, 
@@ -392,61 +412,72 @@ class FraudDetectionModel:
         return y_pred, y_pred_proba
     
     def explain_prediction(self, X: pd.DataFrame, instance_idx: int = 0) -> Dict:
-        """Explain prediction for a specific instance."""
-        if self.model is None:
+        """Explain a prediction using real SHAP values from the underlying tree
+        model -- the standard technique for per-transaction fraud explanations,
+        as opposed to a global-importance heuristic. Positive contributions push
+        the score toward fraud; negative contributions push it toward legitimate.
+        """
+        if self.model is None or self.base_model is None:
             raise ValueError("Model not trained yet")
-        
+
         X_processed = self.feature_engineer.prepare_features(X, fit=False)
-        
-        # Get prediction
-        y_pred_proba = self.model.predict_proba(X_processed[instance_idx:instance_idx+1])[0, 1]
-        
-        # Get feature importance
-        if self.feature_importance is None:
-            return {"prediction": y_pred_proba, "explanation": "Feature importance not available"}
-        
-        # Create explanation
+        instance = X_processed[instance_idx:instance_idx + 1]
+
+        y_pred_proba = self.model.predict_proba(instance)[0, 1]
+
+        explainer = shap.TreeExplainer(self.base_model)
+        shap_values = explainer.shap_values(instance)
+
+        # TreeExplainer returns a list [neg_class, pos_class] for some model/version
+        # combinations and a single array for others -- normalize to the positive
+        # (fraud) class contribution vector either way.
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]
+        contributions_arr = np.asarray(shap_values).reshape(-1)
+
         feature_names = self.feature_engineer.get_feature_names()
-        feature_values = X_processed[instance_idx]
-        
-        explanation = {
+        feature_values = instance[0]
+
+        feature_contributions = [
+            {
+                "feature": name,
+                "value": float(value),
+                "importance": float(abs(contribution)),
+                "contribution": float(contribution),
+            }
+            for name, value, contribution in zip(feature_names, feature_values, contributions_arr)
+        ]
+
+        # Rank by magnitude of impact (standard for SHAP summaries), signed value kept for direction.
+        feature_contributions.sort(key=lambda c: abs(c["contribution"]), reverse=True)
+
+        return {
             "prediction": float(y_pred_proba),
-            "feature_contributions": []
+            "feature_contributions": feature_contributions,
         }
-        
-        # Simple feature contribution (feature importance * normalized feature value)
-        for i, (name, importance) in enumerate(self.feature_importance.items()):
-            if i < len(feature_values):
-                contribution = importance * abs(feature_values[i])
-                explanation["feature_contributions"].append({
-                    "feature": name,
-                    "value": float(feature_values[i]),
-                    "importance": float(importance),
-                    "contribution": float(contribution)
-                })
-        
-        # Sort by contribution
-        explanation["feature_contributions"].sort(
-            key=lambda x: x["contribution"], reverse=True
-        )
-        
-        return explanation
     
     def save_model(self, filepath: str):
         """Save model and feature engineer to disk."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        # Save model
+
+        # Save the calibrated model (used for scoring) and the raw booster
+        # (used for SHAP explanations, which need direct tree access).
         joblib.dump(self.model, f"{filepath}_model.joblib")
-        
+        joblib.dump(self.base_model, f"{filepath}_base_model.joblib")
+
         # Save feature engineer
         self.feature_engineer.save(f"{filepath}_features.joblib")
         
-        # Save metadata
+        # Save metadata. feature_importance values are numpy floats, which
+        # json.dump's default=str fallback would otherwise silently stringify.
+        feature_importance = None
+        if self.feature_importance is not None:
+            feature_importance = {k: float(v) for k, v in self.feature_importance.items()}
+
         metadata = {
             'model_type': self.model_type,
             'use_class_balance': self.use_class_balance,
-            'feature_importance': self.feature_importance,
+            'feature_importance': feature_importance,
             'metrics': self.metrics,
             'feature_names': self.feature_engineer.get_feature_names()
         }
@@ -460,7 +491,8 @@ class FraudDetectionModel:
         """Load model and feature engineer from disk."""
         # Load model
         self.model = joblib.load(f"{filepath}_model.joblib")
-        
+        self.base_model = joblib.load(f"{filepath}_base_model.joblib")
+
         # Load feature engineer
         self.feature_engineer.load(f"{filepath}_features.joblib")
         
@@ -476,54 +508,125 @@ class FraudDetectionModel:
         logger.info(f"Model loaded from {filepath}")
 
 
-def train_ensemble_models(X: pd.DataFrame, y: pd.Series, 
+class AnomalyDetector:
+    """Unsupervised anomaly detector (Isolation Forest) used as an auxiliary
+    fraud signal alongside the supervised LightGBM/XGBoost models.
+
+    This is standard practice in production fraud systems: supervised models
+    can only recognize fraud patterns present in historical labels, while an
+    anomaly detector flags transactions that simply look unlike anything the
+    model has seen, catching novel fraud patterns supervised models miss.
+    """
+
+    def __init__(self, dataset_type: str = 'creditcard', contamination: float = 0.02):
+        self.dataset_type = dataset_type
+        self.contamination = contamination
+        self.feature_engineer = FeatureEngineer(dataset_type=dataset_type)
+        self.model: Optional[IsolationForest] = None
+
+    def train(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> Dict:
+        """Fits the detector unsupervised on X. If y is provided, reports how
+        well the anomaly ranking agrees with the true labels (informational only
+        -- the detector itself never sees y)."""
+        X_processed = self.feature_engineer.prepare_features(X, fit=True)
+
+        self.model = IsolationForest(
+            n_estimators=200,
+            contamination=self.contamination,
+            random_state=42,
+            n_jobs=-1,
+        )
+        self.model.fit(X_processed)
+
+        scores = self._score_processed(X_processed)
+        metrics = {
+            'contamination': self.contamination,
+            'mean_anomaly_score': float(np.mean(scores)),
+        }
+        if y is not None and y.nunique() > 1:
+            metrics['auc_vs_labels'] = float(roc_auc_score(y, scores))
+
+        return metrics
+
+    def _score_processed(self, X_processed: np.ndarray) -> np.ndarray:
+        # decision_function: higher = more normal, lower/negative = more anomalous.
+        # Flip and squash into (0, 1) so it's comparable to a fraud probability.
+        raw = -self.model.decision_function(X_processed)
+        return 1 / (1 + np.exp(-raw))
+
+    def anomaly_score(self, X: pd.DataFrame) -> np.ndarray:
+        """Returns anomaly scores in (0, 1); higher means more anomalous."""
+        if self.model is None:
+            raise ValueError("AnomalyDetector not trained yet")
+        X_processed = self.feature_engineer.prepare_features(X, fit=False)
+        return self._score_processed(X_processed)
+
+    def save(self, filepath: str):
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        joblib.dump(self.model, f"{filepath}_model.joblib")
+        self.feature_engineer.save(f"{filepath}_features.joblib")
+        logger.info(f"Anomaly detector saved to {filepath}")
+
+    def load(self, filepath: str):
+        self.model = joblib.load(f"{filepath}_model.joblib")
+        self.feature_engineer.load(f"{filepath}_features.joblib")
+        logger.info(f"Anomaly detector loaded from {filepath}")
+
+
+def train_ensemble_models(X: pd.DataFrame, y: pd.Series,
                          models_dir: str = "models", dataset_type: str = 'creditcard') -> Dict:
-    """Train ensemble of LightGBM and XGBoost models."""
-    
+    """Train the supervised ensemble (LightGBM + XGBoost) plus an unsupervised
+    Isolation Forest anomaly detector."""
+
     os.makedirs(models_dir, exist_ok=True)
-    
+
     results = {}
-    
+
     # Train LightGBM model
     logger.info("Training LightGBM model...")
     lgb_model = FraudDetectionModel(model_type='lightgbm', use_class_balance=True, dataset_type=dataset_type)
     lgb_metrics = lgb_model.train(X, y)
     lgb_model.save_model(f"{models_dir}/lightgbm")
     results['lightgbm'] = lgb_metrics
-    
+
     # Train XGBoost model
     logger.info("Training XGBoost model...")
     xgb_model = FraudDetectionModel(model_type='xgboost', use_class_balance=True, dataset_type=dataset_type)
     xgb_metrics = xgb_model.train(X, y)
     xgb_model.save_model(f"{models_dir}/xgboost")
     results['xgboost'] = xgb_metrics
-    
-    # Create ensemble predictions
+
+    # Train the Isolation Forest anomaly detector
+    logger.info("Training Isolation Forest anomaly detector...")
+    anomaly_detector = AnomalyDetector(dataset_type=dataset_type)
+    anomaly_metrics = anomaly_detector.train(X, y)
+    anomaly_detector.save(f"{models_dir}/isolation_forest")
+    results['isolation_forest'] = anomaly_metrics
+
+    # Create ensemble predictions (supervised models only; the anomaly score is
+    # combined with these at serving time -- see python-ml/src/serve.py)
     logger.info("Creating ensemble predictions...")
     lgb_pred, lgb_proba = lgb_model.predict(X)
     xgb_pred, xgb_proba = xgb_model.predict(X)
-    
-    # Simple ensemble (average probabilities)
+
     ensemble_proba = (lgb_proba + xgb_proba) / 2
     ensemble_pred = (ensemble_proba > 0.5).astype(int)
-    
-    # Calculate ensemble metrics
-    from sklearn.metrics import roc_auc_score, average_precision_score
+
     ensemble_auc = roc_auc_score(y, ensemble_proba)
     ensemble_ap = average_precision_score(y, ensemble_proba)
-    
+
     results['ensemble'] = {
         'auc': ensemble_auc,
         'average_precision': ensemble_ap
     }
-    
+
     logger.info(f"Ensemble AUC: {ensemble_auc:.4f}")
     logger.info(f"Ensemble AP: {ensemble_ap:.4f}")
-    
+
     # Save ensemble results
     with open(f"{models_dir}/ensemble_results.json", 'w') as f:
         json.dump(results, f, indent=2, default=str)
-    
+
     return results
 
 

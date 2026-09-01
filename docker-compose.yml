@@ -108,6 +108,33 @@ services:
     networks:
       - fraud-detection
 
+  # Python ML Serving Sidecar (loads trained models, serves real predictions)
+  ml-serving:
+    build:
+      context: ./python-ml
+      dockerfile: Dockerfile
+      target: production
+    hostname: ml-serving
+    container_name: ml-serving
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MODELS_DIR=/app/models
+    volumes:
+      - ./python-ml:/app
+      - ml_models:/app/models
+    command: ["uvicorn", "serve:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      - ml-training
+    networks:
+      - fraud-detection
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # Go Inference Service
   inference-api:
     build:
@@ -120,12 +147,14 @@ services:
     environment:
       - PORT=8080
       - MODELS_DIR=/app/models
+      - ML_SERVICE_URL=http://ml-serving:8000
       - LOG_LEVEL=info
       - VERSION=1.0.0
     volumes:
       - ml_models:/app/models
     depends_on:
       - ml-training
+      - ml-serving
     networks:
       - fraud-detection
     healthcheck:

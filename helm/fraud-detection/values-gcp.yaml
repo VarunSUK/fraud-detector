@@ -153,3 +153,11 @@ serviceAccount:
     iam.gke.io/gcp-service-account: fraud-detection@${GCP_PROJECT_ID}.iam.gserviceaccount.com
 
 
+
+
+
+
+
+
+
+

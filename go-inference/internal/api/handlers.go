@@ -68,7 +68,7 @@ func NewHandlers(modelManager *ml.ModelManager, logger *logrus.Logger, version s
 // ScoreHandler handles fraud scoring requests
 func (h *Handlers) ScoreHandler(c *gin.Context) {
 	start := time.Now()
-	
+
 	// Parse request
 	var req models.ScoreRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -81,7 +81,7 @@ func (h *Handlers) ScoreHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("score", "POST", "400").Inc()
 		return
 	}
-	
+
 	// Validate transaction
 	if err := req.Transaction.Validate(); err != nil {
 		h.logger.WithError(err).Error("Transaction validation failed")
@@ -93,10 +93,10 @@ func (h *Handlers) ScoreHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("score", "POST", "400").Inc()
 		return
 	}
-	
+
 	// Get model name from query parameter (default to ensemble)
 	modelName := c.DefaultQuery("model", "ensemble")
-	
+
 	// Get predictor
 	predictor, exists := h.modelManager.GetPredictor(modelName)
 	if !exists {
@@ -109,7 +109,7 @@ func (h *Handlers) ScoreHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("score", "POST", "404").Inc()
 		return
 	}
-	
+
 	// Check if model is loaded
 	if !predictor.IsLoaded() {
 		h.logger.WithField("model", modelName).Error("Model not loaded")
@@ -121,12 +121,12 @@ func (h *Handlers) ScoreHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("score", "POST", "503").Inc()
 		return
 	}
-	
+
 	// Make prediction
 	predictionStart := time.Now()
 	score, prediction, err := predictor.Predict(req.Transaction)
 	predictionDuration := time.Since(predictionStart)
-	
+
 	if err != nil {
 		h.logger.WithError(err).WithField("model", modelName).Error("Prediction failed")
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
@@ -137,7 +137,7 @@ func (h *Handlers) ScoreHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("score", "POST", "500").Inc()
 		return
 	}
-	
+
 	// Create response
 	response := models.ScoreResponse{
 		TransactionID: req.Transaction.TransactionID,
@@ -148,7 +148,7 @@ func (h *Handlers) ScoreHandler(c *gin.Context) {
 		Timestamp:     time.Now(),
 		ProcessingMs:  predictionDuration.Milliseconds(),
 	}
-	
+
 	// Log prediction
 	h.logger.WithFields(logrus.Fields{
 		"transaction_id": req.Transaction.TransactionID,
@@ -157,19 +157,19 @@ func (h *Handlers) ScoreHandler(c *gin.Context) {
 		"prediction":     prediction,
 		"processing_ms":  predictionDuration.Milliseconds(),
 	}).Info("Fraud prediction completed")
-	
+
 	// Update metrics
 	predictionsTotal.WithLabelValues(modelName, strconv.Itoa(prediction)).Inc()
 	requestsTotal.WithLabelValues("score", "POST", "200").Inc()
 	requestDuration.WithLabelValues("score", "POST").Observe(time.Since(start).Seconds())
-	
+
 	c.JSON(http.StatusOK, response)
 }
 
 // ExplainHandler handles prediction explanation requests
 func (h *Handlers) ExplainHandler(c *gin.Context) {
 	start := time.Now()
-	
+
 	// Parse request
 	var req models.ExplainRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -182,7 +182,7 @@ func (h *Handlers) ExplainHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("explain", "POST", "400").Inc()
 		return
 	}
-	
+
 	// Validate transaction
 	if err := req.Transaction.Validate(); err != nil {
 		h.logger.WithError(err).Error("Transaction validation failed")
@@ -194,10 +194,10 @@ func (h *Handlers) ExplainHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("explain", "POST", "400").Inc()
 		return
 	}
-	
+
 	// Get model name from query parameter (default to ensemble)
 	modelName := c.DefaultQuery("model", "ensemble")
-	
+
 	// Get predictor
 	predictor, exists := h.modelManager.GetPredictor(modelName)
 	if !exists {
@@ -210,7 +210,7 @@ func (h *Handlers) ExplainHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("explain", "POST", "404").Inc()
 		return
 	}
-	
+
 	// Check if model is loaded
 	if !predictor.IsLoaded() {
 		h.logger.WithField("model", modelName).Error("Model not loaded")
@@ -222,12 +222,12 @@ func (h *Handlers) ExplainHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("explain", "POST", "503").Inc()
 		return
 	}
-	
+
 	// Get explanation
 	explanationStart := time.Now()
 	response, err := predictor.Explain(req.Transaction)
 	explanationDuration := time.Since(explanationStart)
-	
+
 	if err != nil {
 		h.logger.WithError(err).WithField("model", modelName).Error("Explanation failed")
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
@@ -238,32 +238,32 @@ func (h *Handlers) ExplainHandler(c *gin.Context) {
 		requestsTotal.WithLabelValues("explain", "POST", "500").Inc()
 		return
 	}
-	
+
 	// Update processing time
 	response.ProcessingMs = explanationDuration.Milliseconds()
 	response.Model = modelName
-	
+
 	// Log explanation request
 	h.logger.WithFields(logrus.Fields{
 		"transaction_id": req.Transaction.TransactionID,
 		"model":          modelName,
 		"processing_ms":  explanationDuration.Milliseconds(),
 	}).Info("Prediction explanation completed")
-	
+
 	// Update metrics
 	requestsTotal.WithLabelValues("explain", "POST", "200").Inc()
 	requestDuration.WithLabelValues("explain", "POST").Observe(time.Since(start).Seconds())
-	
+
 	c.JSON(http.StatusOK, response)
 }
 
 // HealthHandler handles health check requests
 func (h *Handlers) HealthHandler(c *gin.Context) {
 	start := time.Now()
-	
+
 	// Get available models
 	availableModels := h.modelManager.GetAvailableModels()
-	
+
 	// Check if at least one model is loaded
 	status := "healthy"
 	for _, modelName := range availableModels {
@@ -274,39 +274,39 @@ func (h *Handlers) HealthHandler(c *gin.Context) {
 		}
 		status = "unhealthy"
 	}
-	
+
 	response := models.HealthResponse{
 		Status:    status,
 		Timestamp: time.Now(),
 		Version:   h.version,
 		Models:    availableModels,
 	}
-	
+
 	// Update metrics
 	requestsTotal.WithLabelValues("health", "GET", "200").Inc()
 	requestDuration.WithLabelValues("health", "GET").Observe(time.Since(start).Seconds())
-	
+
 	c.JSON(http.StatusOK, response)
 }
 
 // ModelsHandler returns information about available models
 func (h *Handlers) ModelsHandler(c *gin.Context) {
 	start := time.Now()
-	
+
 	availableModels := h.modelManager.GetAvailableModels()
 	var modelInfos []models.ModelInfo
-	
+
 	for _, modelName := range availableModels {
 		predictor, exists := h.modelManager.GetPredictor(modelName)
 		if exists {
 			modelInfos = append(modelInfos, *predictor.GetModelInfo())
 		}
 	}
-	
+
 	// Update metrics
 	requestsTotal.WithLabelValues("models", "GET", "200").Inc()
 	requestDuration.WithLabelValues("models", "GET").Observe(time.Since(start).Seconds())
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"models": modelInfos,
 		"count":  len(modelInfos),
@@ -329,13 +329,12 @@ func CORSMiddleware() gin.HandlerFunc {
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-		
+
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
 		}
-		
+
 		c.Next()
 	}
 }
-
