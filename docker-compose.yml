@@ -121,9 +121,11 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - MODELS_DIR=/app/models
+      - AUDIT_DB_PATH=/app/audit/audit_log.db
     volumes:
       - ./python-ml:/app
       - ml_models:/app/models
+      - audit_log:/app/audit
     command: ["uvicorn", "serve:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       - ml-training
@@ -162,6 +164,22 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  # Frontend: decision console, human-review queue, and analytics dashboard
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+    hostname: frontend
+    container_name: frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      - inference-api
+    networks:
+      - fraud-detection
 
   # Data Generator Service
   data-generator:
@@ -205,6 +223,7 @@ volumes:
   grafana_data:
   ml_models:
   ml_output:
+  audit_log:
 
 networks:
   fraud-detection:

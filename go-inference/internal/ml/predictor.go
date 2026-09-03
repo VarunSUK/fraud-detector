@@ -294,6 +294,7 @@ func (e *EnsemblePredictor) IsLoaded() bool {
 // ModelManager manages multiple ML models
 type ModelManager struct {
 	models       map[string]Predictor
+	mlService    *MLServicePredictor
 	logger       *logrus.Logger
 	modelsDir    string
 	mlServiceURL string
@@ -341,6 +342,12 @@ func (m *ModelManager) loadMLModels(ensemble *EnsemblePredictor) error {
 	mlService := NewMLServicePredictor(m.logger, m.mlServiceURL)
 	ensemble.AddPredictor(mlService, 0.7)
 
+	// Registered independently (not just inside the ensemble) so it can be
+	// listed on its own and used directly for credit decisioning, which needs
+	// account context the generic Predictor interface doesn't carry.
+	m.models["ml_service"] = mlService
+	m.mlService = mlService
+
 	return nil
 }
 
@@ -351,6 +358,16 @@ func (m *ModelManager) GetPredictor(name string) (Predictor, bool) {
 
 	predictor, exists := m.models[name]
 	return predictor, exists
+}
+
+// GetMLServicePredictor returns the ml-serving-backed predictor directly, for
+// capabilities (credit decisioning, case review) that aren't part of the
+// generic Predictor interface.
+func (m *ModelManager) GetMLServicePredictor() (*MLServicePredictor, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.mlService, m.mlService != nil
 }
 
 // GetAvailableModels returns a list of available model names
@@ -524,4 +541,132 @@ func (p *MLServicePredictor) GetModelInfo() *models.ModelInfo {
 		},
 		LoadedAt: p.lastHealthCheck,
 	}
+}
+
+type mlServiceDecisionResponse struct {
+	TransactionID             string                           `json:"transaction_id"`
+	FraudScore                float64                          `json:"fraud_score"`
+	Action                    string                           `json:"action"`
+	RiskTier                  string                           `json:"risk_tier"`
+	ReasonCodes               []string                         `json:"reason_codes"`
+	CreditLimitRecommendation models.CreditLimitRecommendation `json:"credit_limit_recommendation"`
+	Narrative                 string                           `json:"narrative"`
+	FeatureContributions      []models.FeatureContribution     `json:"feature_contributions"`
+	ModelScores               map[string]float64               `json:"model_scores"`
+}
+
+// Decide sends the transaction and account context to the ml-serving sidecar's
+// /decision endpoint, which applies the credit risk policy and records the
+// outcome to its audit log. This isn't part of the Predictor interface: only
+// the ml-serving-backed predictor supports credit decisioning today.
+func (p *MLServicePredictor) Decide(transaction *models.Transaction, account *models.AccountContext) (*models.DecisionResponse, error) {
+	payload := struct {
+		Transaction *models.Transaction    `json:"transaction"`
+		Account     *models.AccountContext `json:"account"`
+	}{Transaction: transaction, Account: account}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal decision request: %w", err)
+	}
+
+	resp, err := p.httpClient.Post(p.baseURL+"/decision", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("ml-service request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ml-service returned status %d", resp.StatusCode)
+	}
+
+	var result mlServiceDecisionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode ml-service response: %w", err)
+	}
+
+	return &models.DecisionResponse{
+		TransactionID:             result.TransactionID,
+		FraudScore:                result.FraudScore,
+		Action:                    result.Action,
+		RiskTier:                  result.RiskTier,
+		ReasonCodes:               result.ReasonCodes,
+		CreditLimitRecommendation: result.CreditLimitRecommendation,
+		Narrative:                 result.Narrative,
+		FeatureContributions:      result.FeatureContributions,
+		ModelScores:               result.ModelScores,
+		Timestamp:                 time.Now(),
+	}, nil
+}
+
+// GetAnalyticsSummary fetches the live approval-funnel and score-decile
+// breakdown from the ml-serving sidecar's audit log.
+func (p *MLServicePredictor) GetAnalyticsSummary() (*models.AnalyticsSummary, error) {
+	resp, err := p.httpClient.Get(p.baseURL + "/analytics/summary")
+	if err != nil {
+		return nil, fmt.Errorf("ml-service request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ml-service returned status %d", resp.StatusCode)
+	}
+
+	var result models.AnalyticsSummary
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode ml-service response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// ListCases fetches the pending human-review queue from the ml-serving sidecar.
+func (p *MLServicePredictor) ListCases() ([]models.Case, error) {
+	resp, err := p.httpClient.Get(p.baseURL + "/cases")
+	if err != nil {
+		return nil, fmt.Errorf("ml-service request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ml-service returned status %d", resp.StatusCode)
+	}
+
+	var result models.CasesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode ml-service response: %w", err)
+	}
+
+	return result.Cases, nil
+}
+
+// ResolveCase records an analyst's verdict on a pending case via the ml-serving sidecar.
+func (p *MLServicePredictor) ResolveCase(caseID int64, req *models.ResolveCaseRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal resolve request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/cases/%d/resolve", p.baseURL, caseID)
+	resp, err := p.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("ml-service request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return errCaseNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ml-service returned status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+var errCaseNotFound = fmt.Errorf("case not found")
+
+// IsErrCaseNotFound reports whether err indicates the sidecar returned 404 for a case.
+func IsErrCaseNotFound(err error) bool {
+	return err == errCaseNotFound
 }

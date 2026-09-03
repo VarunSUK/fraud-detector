@@ -105,6 +105,96 @@ type ExplainResponse struct {
 	ProcessingMs int64              `json:"processing_ms"`
 }
 
+// AccountContext carries the cardholder/account state a credit decisioning
+// policy needs on top of the transaction itself (credit limit, utilization,
+// delinquency history).
+type AccountContext struct {
+	CreditLimit             float64 `json:"credit_limit"`
+	CurrentBalance          float64 `json:"current_balance"`
+	AccountAgeDays          int     `json:"account_age_days"`
+	DelinquentPaymentsCount int     `json:"delinquent_payments_count"`
+	AvgMonthlySpend         float64 `json:"avg_monthly_spend"`
+}
+
+// DecisionRequest represents a request for a credit risk decision (score + policy action).
+type DecisionRequest struct {
+	Transaction *Transaction    `json:"transaction" binding:"required"`
+	Account     *AccountContext `json:"account"`
+}
+
+// CreditLimitRecommendation is the credit-limit adjustment signal from the decisioning policy.
+type CreditLimitRecommendation struct {
+	Current       float64 `json:"current"`
+	Recommended   float64 `json:"recommended"`
+	AdjustmentPct float64 `json:"adjustment_pct"`
+}
+
+// DecisionResponse represents the outcome of applying the credit risk policy to a scored transaction.
+type DecisionResponse struct {
+	TransactionID             string                    `json:"transaction_id"`
+	FraudScore                float64                   `json:"fraud_score"`
+	Action                    string                    `json:"action"` // "approve" | "step_up_review" | "decline"
+	RiskTier                  string                    `json:"risk_tier"`
+	ReasonCodes               []string                  `json:"reason_codes"`
+	CreditLimitRecommendation CreditLimitRecommendation `json:"credit_limit_recommendation"`
+	Narrative                 string                    `json:"narrative"`
+	FeatureContributions      []FeatureContribution     `json:"feature_contributions"`
+	ModelScores               map[string]float64        `json:"model_scores"`
+	Timestamp                 time.Time                 `json:"timestamp"`
+	ProcessingMs              int64                     `json:"processing_ms"`
+}
+
+// Case represents a pending human-review item in the analyst queue.
+type Case struct {
+	ID                     int64              `json:"id"`
+	TransactionID          string             `json:"transaction_id"`
+	CreatedAt              float64            `json:"created_at"`
+	Amount                 float64            `json:"amount"`
+	FraudScore             float64            `json:"fraud_score"`
+	Action                 string             `json:"action"`
+	RiskTier               string             `json:"risk_tier"`
+	ReasonCodes            []string           `json:"reason_codes"`
+	ModelScores            map[string]float64 `json:"model_scores"`
+	CreditLimitCurrent     float64            `json:"credit_limit_current"`
+	CreditLimitRecommended float64            `json:"credit_limit_recommended"`
+	AnalystVerdict         *string            `json:"analyst_verdict"`
+	IsActualFraud          *bool              `json:"is_actual_fraud"`
+}
+
+// CasesResponse wraps the pending review queue.
+type CasesResponse struct {
+	Cases []Case `json:"cases"`
+}
+
+// ResolveCaseRequest represents an analyst's verdict on a pending case.
+type ResolveCaseRequest struct {
+	Verdict       string `json:"verdict" binding:"required"` // "approve" | "decline"
+	IsActualFraud *bool  `json:"is_actual_fraud,omitempty"`
+}
+
+// FunnelRow is one row of the approval funnel (approve / step_up_review / decline).
+type FunnelRow struct {
+	Action           string  `json:"action"`
+	TransactionCount int64   `json:"transaction_count"`
+	PctOfVolume      float64 `json:"pct_of_volume"`
+	TotalAmount      float64 `json:"total_amount"`
+	AvgFraudScore    float64 `json:"avg_fraud_score"`
+}
+
+// ScoreDecileRow is one row of the fraud-rate-by-score-decile breakdown.
+type ScoreDecileRow struct {
+	ScoreDecile         int     `json:"score_decile"`
+	TransactionCount    int64   `json:"transaction_count"`
+	ConfirmedFraudCount int64   `json:"confirmed_fraud_count"`
+	FraudRatePct        float64 `json:"fraud_rate_pct"`
+}
+
+// AnalyticsSummary is the live model-evaluation/decisioning summary for the dashboard.
+type AnalyticsSummary struct {
+	Funnel       []FunnelRow      `json:"funnel"`
+	ScoreDeciles []ScoreDecileRow `json:"score_deciles"`
+}
+
 // HealthResponse represents the health check response
 type HealthResponse struct {
 	Status    string    `json:"status"`

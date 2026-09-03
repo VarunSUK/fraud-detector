@@ -124,6 +124,10 @@ func setupRouter(handlers *api.Handlers, logger *logrus.Logger) *gin.Engine {
 		v1.POST("/explain", handlers.ExplainHandler)
 		v1.GET("/models", handlers.ModelsHandler)
 		v1.GET("/metrics", handlers.MetricsHandler)
+		v1.POST("/decision", handlers.DecisionHandler)
+		v1.GET("/cases", handlers.CasesHandler)
+		v1.POST("/cases/:id/resolve", handlers.ResolveCaseHandler)
+		v1.GET("/analytics/summary", handlers.AnalyticsSummaryHandler)
 	}
 
 	// Legacy routes for backward compatibility

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 )
 
@@ -313,13 +314,191 @@ func (h *Handlers) ModelsHandler(c *gin.Context) {
 	})
 }
 
+// metricsHandler wraps promhttp.Handler() to expose the metrics registered
+// above (requestsTotal, requestDuration, predictionsTotal, modelLoadTime) in
+// real Prometheus exposition format, so the existing prometheus.yml scrape
+// config and Grafana dashboards in this repo have something real to read.
+var metricsHandler = promhttp.Handler()
+
 // MetricsHandler exposes Prometheus metrics
 func (h *Handlers) MetricsHandler(c *gin.Context) {
-	// This would typically use promhttp.Handler() in a real implementation
-	// For now, return a simple response
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Metrics endpoint - use /metrics for Prometheus format",
-	})
+	metricsHandler.ServeHTTP(c.Writer, c.Request)
+}
+
+// DecisionHandler scores a transaction and applies the credit risk policy,
+// returning an actionable decision (approve/step_up_review/decline) plus a
+// credit-limit signal and an analyst narrative, not just a bare score.
+func (h *Handlers) DecisionHandler(c *gin.Context) {
+	start := time.Now()
+
+	var req models.DecisionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.WithError(err).Error("Invalid request format")
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:     "Invalid request format",
+			Message:   err.Error(),
+			Timestamp: time.Now(),
+		})
+		requestsTotal.WithLabelValues("decision", "POST", "400").Inc()
+		return
+	}
+
+	if err := req.Transaction.Validate(); err != nil {
+		h.logger.WithError(err).Error("Transaction validation failed")
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:     "Transaction validation failed",
+			Message:   err.Error(),
+			Timestamp: time.Now(),
+		})
+		requestsTotal.WithLabelValues("decision", "POST", "400").Inc()
+		return
+	}
+
+	if req.Account == nil {
+		req.Account = &models.AccountContext{}
+	}
+
+	mlService, exists := h.modelManager.GetMLServicePredictor()
+	if !exists || !mlService.IsLoaded() {
+		h.logger.Warn("ml-service unavailable for decisioning")
+		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
+			Error:     "Decisioning unavailable",
+			Message:   "ml-serving sidecar is not reachable or has no models loaded",
+			Timestamp: time.Now(),
+		})
+		requestsTotal.WithLabelValues("decision", "POST", "503").Inc()
+		return
+	}
+
+	decisionStart := time.Now()
+	decision, err := mlService.Decide(req.Transaction, req.Account)
+	decisionDuration := time.Since(decisionStart)
+
+	if err != nil {
+		h.logger.WithError(err).Error("Decisioning failed")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:     "Decisioning failed",
+			Message:   err.Error(),
+			Timestamp: time.Now(),
+		})
+		requestsTotal.WithLabelValues("decision", "POST", "500").Inc()
+		return
+	}
+
+	decision.ProcessingMs = decisionDuration.Milliseconds()
+
+	h.logger.WithFields(logrus.Fields{
+		"transaction_id": decision.TransactionID,
+		"action":         decision.Action,
+		"risk_tier":      decision.RiskTier,
+		"processing_ms":  decision.ProcessingMs,
+	}).Info("Credit decision completed")
+
+	requestsTotal.WithLabelValues("decision", "POST", "200").Inc()
+	requestDuration.WithLabelValues("decision", "POST").Observe(time.Since(start).Seconds())
+
+	c.JSON(http.StatusOK, decision)
+}
+
+// AnalyticsSummaryHandler returns the live approval-funnel and score-decile
+// breakdown for the dashboard.
+func (h *Handlers) AnalyticsSummaryHandler(c *gin.Context) {
+	mlService, exists := h.modelManager.GetMLServicePredictor()
+	if !exists {
+		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
+			Error:     "Analytics unavailable",
+			Message:   "ml-serving sidecar is not configured",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	summary, err := mlService.GetAnalyticsSummary()
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to fetch analytics summary")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:     "Failed to fetch analytics summary",
+			Message:   err.Error(),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, summary)
+}
+
+// CasesHandler returns the pending human-review queue.
+func (h *Handlers) CasesHandler(c *gin.Context) {
+	mlService, exists := h.modelManager.GetMLServicePredictor()
+	if !exists {
+		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
+			Error:     "Case queue unavailable",
+			Message:   "ml-serving sidecar is not configured",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	cases, err := mlService.ListCases()
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to fetch case queue")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:     "Failed to fetch case queue",
+			Message:   err.Error(),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.CasesResponse{Cases: cases})
+}
+
+// ResolveCaseHandler records an analyst's verdict on a pending case.
+func (h *Handlers) ResolveCaseHandler(c *gin.Context) {
+	caseID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:     "Invalid case id",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	var req models.ResolveCaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:     "Invalid request format",
+			Message:   err.Error(),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	mlService, exists := h.modelManager.GetMLServicePredictor()
+	if !exists {
+		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
+			Error:     "Case queue unavailable",
+			Message:   "ml-serving sidecar is not configured",
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	if err := mlService.ResolveCase(caseID, &req); err != nil {
+		if ml.IsErrCaseNotFound(err) {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "Case not found", Timestamp: time.Now()})
+			return
+		}
+		h.logger.WithError(err).Error("Failed to resolve case")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error:     "Failed to resolve case",
+			Message:   err.Error(),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"case_id": caseID, "verdict": req.Verdict})
 }
 
 // CORSMiddleware handles CORS

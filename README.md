@@ -55,11 +55,20 @@ graph TB
 ## 🚀 Key Features
 
 ### 🔬 Advanced Machine Learning
-- **Ensemble Learning**: Combines LightGBM and XGBoost for superior accuracy
+- **Ensemble Learning**: Combines LightGBM, XGBoost, and an unsupervised Isolation Forest anomaly detector, blended into a single weighted score
 - **Class Imbalance Handling**: SMOTE, class weights, and balanced sampling techniques
+- **Probability Calibration**: `CalibratedClassifierCV` (Platt scaling) so scores are real probabilities a policy can threshold, not raw GBM margins
 - **Feature Engineering**: 20+ derived features including time-based, amount-based, and statistical features
-- **Model Interpretability**: SHAP-like feature attribution and explanation capabilities
+- **Model Interpretability**: Real per-transaction SHAP values (`shap.TreeExplainer`), not a global-importance heuristic
 - **Cross-Validation**: Stratified K-fold validation for robust model evaluation
+
+### 💳 Credit Risk Decisioning
+- **Actionable Decisions**: Turns a fraud score into approve / step-up-review / decline, not just a probability
+- **Credit Limit Policy**: Explainable limit-adjustment logic driven by risk, utilization, and delinquency history
+- **Human-in-the-Loop Review**: A persisted case queue for borderline transactions, with analyst approve/decline resolution
+- **Case Narratives**: Auto-generated, analyst-memo-style summaries from the SHAP explanation and policy reason codes
+- **SQL-Backed Analytics**: Every decision is logged to an auditable SQLite store; `analytics/sql/` answers real risk-strategy questions (loss rate by score decile, approval funnel, threshold trade-offs, review queue aging)
+- **Review Console**: A React dashboard for scoring transactions, working the review queue, and watching live model/policy analytics
 
 ### ⚡ High-Performance Inference
 - **Sub-100ms Latency**: Go-based inference service for real-time predictions
@@ -86,24 +95,38 @@ graph TB
 
 ```
 fraud-detection/
-├── 📁 python-ml/                 # ML Training Pipeline
+├── 📁 python-ml/                 # ML Training + Serving
 │   ├── 📁 src/                   # Source code
-│   │   ├── models.py            # ML models and feature engineering
+│   │   ├── models.py            # LightGBM/XGBoost + Isolation Forest, calibration, SHAP
+│   │   ├── serve.py             # FastAPI sidecar: /predict, /explain, /decision, /cases, /analytics
+│   │   ├── credit_decisioning.py # Score -> approve/review/decline + credit-limit policy
+│   │   ├── narrative.py         # Templated case-narrative generator
+│   │   ├── audit_log.py         # SQLite decision audit log + analytics queries
 │   │   └── data_generator.py    # Synthetic data generation
+│   ├── 📁 tests/                # pytest suite for all of the above
 │   ├── 📁 notebooks/            # Jupyter notebooks for analysis
 │   ├── 📁 models/               # Trained model artifacts
 │   ├── 📁 data/                 # Training datasets
 │   ├── train.py                 # Main training script
 │   ├── requirements.txt         # Python dependencies
-│   └── Dockerfile              # ML training container
-├── 📁 go-inference/             # Inference Service
+│   └── Dockerfile              # ML training + serving container
+├── 📁 go-inference/             # Inference / Decisioning API
 │   ├── 📁 cmd/server/          # Main application
 │   ├── 📁 internal/            # Internal packages
-│   │   ├── 📁 api/             # HTTP handlers
-│   │   ├── 📁 ml/              # ML prediction logic
+│   │   ├── 📁 api/             # HTTP handlers (score, explain, decision, cases, analytics)
+│   │   ├── 📁 ml/              # Predictors, ml-serving HTTP client
 │   │   └── 📁 models/          # Data models
 │   ├── go.mod                  # Go module definition
 │   └── Dockerfile             # Inference service container
+├── 📁 frontend/                 # Decision console (React + TypeScript + Vite)
+│   ├── 📁 src/
+│   │   ├── App.tsx             # Tab shell: Decision Console / Review Queue / Analytics
+│   │   ├── api.ts              # Typed client for the Go API
+│   │   └── 📁 components/      # Transaction form, SHAP chart, review queue, dashboard
+│   └── Dockerfile              # nginx-served production build
+├── 📁 analytics/                # Credit risk / fraud analyst SQL reports
+│   ├── 📁 sql/                  # approval_funnel, loss_rate_by_score_decile, threshold_tradeoff, review_queue_aging
+│   └── run_report.py            # Runs the .sql files against the audit log and prints them
 ├── 📁 data-generator/          # Data Generation Service
 │   ├── 📁 src/                # Source code
 │   ├── 📁 config/             # Configuration files
@@ -131,7 +154,9 @@ fraud-detection/
 │       └── values-azure.yaml # Azure-specific values
 ├── 📁 scripts/               # Utility Scripts
 │   ├── create-cluster-aws.sh # AWS cluster creation
-│   └── deploy.sh            # Deployment script
+│   ├── deploy.sh            # Deployment script
+│   └── seed_audit_log.py    # Seeds realistic historical decisions for analytics/the review queue
+├── 📁 .github/workflows/     # CI: Go tests, Python tests, frontend tests, analytics SQL tests
 ├── 📁 docs/                  # Documentation
 ├── 📁 examples/              # Usage examples
 ├── docker-compose.yml        # Local development setup
@@ -203,26 +228,48 @@ fraud-detection/
    docker-compose logs -f kafka
    ```
 
-3. **Train ML models**
+3. **Train the ensemble and seed some history**
    ```bash
    cd python-ml
    pip install -r requirements.txt
-   
-   # Train with synthetic data
-   python train.py --generate-data --num-users 1000 --transactions-per-user 50
-   
-   # Or train with credit card dataset
-   python train.py --data-file ../creditcard.csv --dataset-type creditcard
+   cd ..
+
+   # Trains LightGBM + XGBoost + Isolation Forest on synthetic creditcard-shaped
+   # data, then scores a batch of historical transactions through the credit
+   # risk policy so analytics/ and the review queue have real data to show.
+   python scripts/seed_audit_log.py --models-dir python-ml/models --db audit_log.db --train
+
+   # To train against the real Kaggle creditcard.csv dataset instead:
+   # python python-ml/train.py --data-file creditcard.csv --dataset-type creditcard --models-dir python-ml/models
    ```
 
-4. **Run inference service**
+4. **Run the ML serving sidecar**
+   ```bash
+   cd python-ml
+   MODELS_DIR=models AUDIT_DB_PATH=../audit_log.db uvicorn serve:app --app-dir src --port 8000
+   ```
+
+5. **Run the inference / decisioning API**
    ```bash
    cd go-inference
    go mod tidy
-   go run cmd/server/main.go
+   ML_SERVICE_URL=http://localhost:8000 go run cmd/server/main.go
    ```
 
-5. **Generate synthetic data**
+6. **Run the frontend**
+   ```bash
+   cd frontend
+   npm install
+   VITE_API_BASE_URL=http://localhost:8080 npm run dev
+   # open http://localhost:5173
+   ```
+
+7. **Run the SQL analyst reports** (optional, no server needed)
+   ```bash
+   python analytics/run_report.py --db audit_log.db
+   ```
+
+8. **Generate synthetic streaming data** (optional, exercises Kafka/Redis)
    ```bash
    cd data-generator
    pip install -r requirements.txt
@@ -403,6 +450,58 @@ Get information about available models.
 }
 ```
 
+#### 💳 Credit Risk Decision
+**POST** `/api/v1/decision`
+
+Scores a transaction, applies the credit risk policy, records it to the audit log, and returns an actionable result plus an analyst narrative -- what a credit risk workflow actually consumes, not just a probability.
+
+**Request Body:**
+```json
+{
+  "transaction": {
+    "transaction_id": "txn_123456789",
+    "amount": 2500.00,
+    "time": 90000,
+    "v14": -3.2, "v4": 2.1
+  },
+  "account": {
+    "credit_limit": 5000,
+    "current_balance": 1000,
+    "account_age_days": 400,
+    "delinquent_payments_count": 0,
+    "avg_monthly_spend": 800
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "transaction_id": "txn_123456789",
+  "fraud_score": 0.74,
+  "action": "step_up_review",
+  "risk_tier": "medium",
+  "reason_codes": ["ELEVATED_FRAUD_SCORE"],
+  "credit_limit_recommendation": { "current": 5000, "recommended": 5000, "adjustment_pct": 0 },
+  "narrative": "txn_123456789 scored 0.74 and was routed to manual review (medium risk). Policy triggers: ELEVATED_FRAUD_SCORE. Top model signals: V14 (+2.98); amount_log (+2.53); Amount (+0.88).",
+  "feature_contributions": [ { "feature": "V14", "value": -3.2, "importance": 2.98, "contribution": 2.98 } ],
+  "model_scores": { "lightgbm": 0.91, "xgboost": 0.71, "isolation_forest": 0.47 }
+}
+```
+
+#### 🗂️ Review Queue
+**GET** `/api/v1/cases` -- lists pending `step_up_review` decisions awaiting an analyst verdict.
+
+**POST** `/api/v1/cases/:id/resolve` -- records the verdict:
+```json
+{ "verdict": "approve", "is_actual_fraud": false }
+```
+
+#### 📈 Analytics Summary
+**GET** `/api/v1/analytics/summary`
+
+Live approval funnel and fraud-rate-by-score-decile breakdown, computed from the audit log (same queries as `analytics/sql/approval_funnel.sql` and `loss_rate_by_score_decile.sql`). For deeper ad hoc analysis -- threshold trade-offs, review queue aging -- run `python analytics/run_report.py` directly against the database.
+
 ## 📊 Monitoring & Observability
 
 ### Prometheus Metrics
@@ -498,14 +597,23 @@ monitoring:
 
 ### Unit Tests
 ```bash
-# Python tests
+# Python tests (models, serving, credit decisioning, narrative, audit log)
 cd python-ml
 python -m pytest tests/ -v
 
-# Go tests
+# Go tests (handlers, predictors, ensemble, router)
 cd go-inference
 go test ./... -v
+
+# Frontend tests (sample-data generation, API client)
+cd frontend
+npm test
+
+# Analytics SQL reports (schema/syntax regression guard)
+python -m pytest analytics/test_run_report.py -v
 ```
+
+All four run in CI on every push -- see `.github/workflows/ci.yml`.
 
 ### Integration Tests
 ```bash

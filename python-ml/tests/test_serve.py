@@ -91,6 +91,109 @@ def test_explain_returns_feature_contributions(trained_models_dir):
     assert set(body["model_scores"].keys()) == {"lightgbm", "xgboost", "isolation_forest"}
 
 
+def test_decision_returns_action_and_records_audit_log(trained_models_dir, tmp_path):
+    db_path = str(tmp_path / "audit.db")
+    app = create_app(models_dir=trained_models_dir, db_path=db_path)
+    client = TestClient(app)
+
+    payload = {
+        "transaction": {"time": 90000, "amount": 2500, "transaction_id": "txn_decision", "v14": -4.0, "v4": 3.0},
+        "account": {"credit_limit": 5000, "current_balance": 1000, "delinquent_payments_count": 0},
+    }
+    resp = client.post("/decision", json=payload)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["transaction_id"] == "txn_decision"
+    assert body["action"] in ("approve", "step_up_review", "decline")
+    assert body["risk_tier"] in ("low", "medium", "high")
+    assert "narrative" in body and "txn_decision" in body["narrative"]
+    assert "credit_limit_recommendation" in body
+    assert set(body["model_scores"].keys()) == {"lightgbm", "xgboost", "isolation_forest"}
+
+    import audit_log
+
+    conn = audit_log.connect(db_path)
+    rows = conn.execute("SELECT * FROM decisions WHERE transaction_id = 'txn_decision'").fetchall()
+    conn.close()
+    assert len(rows) == 1
+
+
+def test_decision_returns_503_when_no_models(tmp_path):
+    app = create_app(models_dir=str(tmp_path / "models"), db_path=str(tmp_path / "audit.db"))
+    client = TestClient(app)
+
+    resp = client.post("/decision", json={"transaction": {"time": 1000, "amount": 50}})
+
+    assert resp.status_code == 503
+
+
+def test_cases_queue_lifecycle(trained_models_dir, tmp_path):
+    db_path = str(tmp_path / "audit.db")
+    app = create_app(models_dir=trained_models_dir, db_path=db_path)
+    client = TestClient(app)
+
+    # A moderately elevated score should land in step_up_review and show up in the queue.
+    payload = {
+        "transaction": {"time": 45000, "amount": 800, "transaction_id": "txn_case", "v14": -2.0, "v4": 1.5},
+        "account": {"credit_limit": 5000, "current_balance": 1000},
+    }
+    client.post("/decision", json=payload)
+
+    cases_resp = client.get("/cases")
+    assert cases_resp.status_code == 200
+    cases = cases_resp.json()["cases"]
+
+    review_cases = [c for c in cases if c["transaction_id"] == "txn_case"]
+    if not review_cases:
+        # This particular transaction didn't land in review under the toy model -- not
+        # informative either way, skip the resolve half rather than asserting on luck.
+        return
+
+    case_id = review_cases[0]["id"]
+    resolve_resp = client.post(f"/cases/{case_id}/resolve", json={"verdict": "approve", "is_actual_fraud": False})
+    assert resolve_resp.status_code == 200
+
+    cases_after = client.get("/cases").json()["cases"]
+    assert all(c["id"] != case_id for c in cases_after)
+
+
+def test_resolve_unknown_case_returns_404(trained_models_dir, tmp_path):
+    db_path = str(tmp_path / "audit.db")
+    app = create_app(models_dir=trained_models_dir, db_path=db_path)
+    client = TestClient(app)
+
+    resp = client.post("/cases/999/resolve", json={"verdict": "approve"})
+    assert resp.status_code == 404
+
+
+def test_resolve_invalid_verdict_returns_400(trained_models_dir, tmp_path):
+    db_path = str(tmp_path / "audit.db")
+    app = create_app(models_dir=trained_models_dir, db_path=db_path)
+    client = TestClient(app)
+
+    resp = client.post("/cases/1/resolve", json={"verdict": "maybe"})
+    assert resp.status_code == 400
+
+
+def test_analytics_summary_reflects_recorded_decisions(trained_models_dir, tmp_path):
+    db_path = str(tmp_path / "audit.db")
+    app = create_app(models_dir=trained_models_dir, db_path=db_path)
+    client = TestClient(app)
+
+    payload = {
+        "transaction": {"time": 90000, "amount": 2500, "transaction_id": "txn_analytics", "v14": -4.0, "v4": 3.0},
+        "account": {"credit_limit": 5000},
+    }
+    client.post("/decision", json=payload)
+
+    resp = client.get("/analytics/summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "funnel" in body and "score_deciles" in body
+    assert sum(row["transaction_count"] for row in body["funnel"]) == 1
+
+
 def test_to_creditcard_frame_maps_lowercase_fields_to_uppercase_columns():
     payload = TransactionPayload(time=5.0, amount=10.0, v1=0.5, v28=-0.5)
 

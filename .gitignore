@@ -181,6 +181,12 @@ charts/*.tgz
 *.onnx
 models/*.bin
 models/*.model
+python-ml/models/*
+!python-ml/models/.gitkeep
+
+# Audit log (SQLite) -- generated locally by seed_audit_log.py / the ml-serving sidecar
+*.db
+*.db-journal
 
 # Data files (large datasets)
 *.csv

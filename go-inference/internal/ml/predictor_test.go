@@ -234,6 +234,67 @@ func TestMLServicePredictor_HealthyPredictAndExplain(t *testing.T) {
 	}
 }
 
+func TestMLServicePredictor_DecisionAndCases(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/decision":
+			json.NewEncoder(w).Encode(mlServiceDecisionResponse{
+				TransactionID: "txn_1",
+				FraudScore:    0.6,
+				Action:        "step_up_review",
+				RiskTier:      "medium",
+				ReasonCodes:   []string{"ELEVATED_FRAUD_SCORE"},
+				CreditLimitRecommendation: models.CreditLimitRecommendation{
+					Current: 5000, Recommended: 5000, AdjustmentPct: 0,
+				},
+				Narrative:   "txn_1 scored 0.60 and was routed to manual review.",
+				ModelScores: map[string]float64{"lightgbm": 0.6},
+			})
+		case r.URL.Path == "/cases":
+			json.NewEncoder(w).Encode(models.CasesResponse{
+				Cases: []models.Case{{ID: 1, TransactionID: "txn_1", Action: "step_up_review"}},
+			})
+		case r.URL.Path == "/cases/1/resolve":
+			json.NewEncoder(w).Encode(map[string]interface{}{"case_id": 1, "verdict": "approve"})
+		case r.URL.Path == "/cases/999/resolve":
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	predictor := NewMLServicePredictor(testLogger(), server.URL)
+
+	decision, err := predictor.Decide(&models.Transaction{Amount: 500}, &models.AccountContext{CreditLimit: 5000})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != "step_up_review" || decision.TransactionID != "txn_1" {
+		t.Errorf("Decide() = %+v, unexpected fields", decision)
+	}
+	if decision.Narrative == "" {
+		t.Error("expected a non-empty narrative")
+	}
+
+	cases, err := predictor.ListCases()
+	if err != nil {
+		t.Fatalf("ListCases() error = %v", err)
+	}
+	if len(cases) != 1 || cases[0].TransactionID != "txn_1" {
+		t.Errorf("ListCases() = %+v, want one case for txn_1", cases)
+	}
+
+	if err := predictor.ResolveCase(1, &models.ResolveCaseRequest{Verdict: "approve"}); err != nil {
+		t.Errorf("ResolveCase(1) error = %v", err)
+	}
+
+	err = predictor.ResolveCase(999, &models.ResolveCaseRequest{Verdict: "approve"})
+	if err == nil || !IsErrCaseNotFound(err) {
+		t.Errorf("ResolveCase(999) error = %v, want a not-found error", err)
+	}
+}
+
 func TestMLServicePredictor_DegradedWhenNoModelsLoaded(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(mlServiceHealthResponse{Status: "degraded", ModelsLoaded: []string{}})

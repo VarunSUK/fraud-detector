@@ -14,7 +14,10 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+import audit_log
+from credit_decisioning import AccountContext, decide
 from models import AnomalyDetector, FraudDetectionModel
+from narrative import generate as generate_narrative
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -72,6 +75,24 @@ def to_creditcard_frame(payload: TransactionPayload) -> pd.DataFrame:
     for i in range(1, 29):
         row[f"V{i}"] = getattr(payload, f"v{i}")
     return pd.DataFrame([row])
+
+
+class AccountContextPayload(BaseModel):
+    credit_limit: float = 0.0
+    current_balance: float = 0.0
+    account_age_days: int = 0
+    delinquent_payments_count: int = 0
+    avg_monthly_spend: float = 0.0
+
+
+class DecisionRequestPayload(BaseModel):
+    transaction: TransactionPayload
+    account: AccountContextPayload = AccountContextPayload()
+
+
+class ResolveCasePayload(BaseModel):
+    verdict: str  # "approve" | "decline"
+    is_actual_fraud: Optional[bool] = None
 
 
 class ModelStore:
@@ -156,17 +177,21 @@ class ModelStore:
         return model.explain_prediction(frame, instance_idx=0)
 
 
-def create_app(models_dir: Optional[str] = None) -> FastAPI:
+def create_app(models_dir: Optional[str] = None, db_path: Optional[str] = None) -> FastAPI:
     """Build a FastAPI app bound to a ModelStore for the given models_dir.
 
     Exposed as a factory (rather than a bare module-level app) so tests can
-    point at an isolated models directory without touching process env/state.
+    point at an isolated models directory / audit database without touching
+    process env/state.
     """
     resolved_dir = models_dir or os.environ.get("MODELS_DIR", "models")
+    resolved_db_path = db_path or os.environ.get("AUDIT_DB_PATH", audit_log.DEFAULT_DB_PATH)
     store = ModelStore(resolved_dir)
+    audit_log.connect(resolved_db_path).close()  # ensure schema exists up front
 
     app = FastAPI(title="Fraud Detection ML Service")
     app.state.store = store
+    app.state.db_path = resolved_db_path
 
     @app.get("/health")
     def health():
@@ -212,6 +237,94 @@ def create_app(models_dir: Optional[str] = None) -> FastAPI:
             "feature_contributions": explanation.get("feature_contributions", []),
             "model_scores": result["components"],
         }
+
+    @app.post("/decision")
+    def decision(payload: DecisionRequestPayload):
+        """Scores the transaction, applies the credit risk policy, records the
+        decision to the audit log, and returns an actionable result -- the
+        thing a credit risk workflow actually consumes, as opposed to a bare
+        probability."""
+        if not store.is_ready():
+            raise HTTPException(status_code=503, detail="no models loaded")
+
+        frame = to_creditcard_frame(payload.transaction)
+        try:
+            result = store.predict_score(frame)
+            explanation = store.explain(frame)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        account = AccountContext(**payload.account.model_dump())
+        anomaly_score = result["components"].get(ANOMALY_MODEL_NAME, 0.0)
+        outcome = decide(result["score"], payload.transaction.amount, account, anomaly_score)
+
+        feature_contributions = explanation.get("feature_contributions", [])
+        narrative_text = generate_narrative(
+            transaction_id=payload.transaction.transaction_id,
+            action=outcome.action,
+            risk_tier=outcome.risk_tier,
+            reason_codes=outcome.reason_codes,
+            feature_contributions=feature_contributions,
+            fraud_score=result["score"],
+        )
+
+        audit_log.record_decision(
+            app.state.db_path,
+            transaction_id=payload.transaction.transaction_id,
+            amount=payload.transaction.amount,
+            fraud_score=result["score"],
+            action=outcome.action,
+            risk_tier=outcome.risk_tier,
+            reason_codes=outcome.reason_codes,
+            model_scores=result["components"],
+            credit_limit_current=outcome.credit_limit_current,
+            credit_limit_recommended=outcome.credit_limit_recommended,
+        )
+
+        return {
+            "transaction_id": payload.transaction.transaction_id,
+            "fraud_score": result["score"],
+            "action": outcome.action,
+            "risk_tier": outcome.risk_tier,
+            "reason_codes": outcome.reason_codes,
+            "credit_limit_recommendation": {
+                "current": outcome.credit_limit_current,
+                "recommended": outcome.credit_limit_recommended,
+                "adjustment_pct": outcome.credit_limit_adjustment_pct,
+            },
+            "narrative": narrative_text,
+            "feature_contributions": feature_contributions,
+            "model_scores": result["components"],
+        }
+
+    @app.get("/analytics/summary")
+    def analytics_summary():
+        """Live version of analytics/sql/approval_funnel.sql and
+        loss_rate_by_score_decile.sql, for the dashboard. For deeper ad hoc
+        analysis, run analytics/run_report.py against the same database."""
+        return {
+            "funnel": audit_log.funnel_summary(app.state.db_path),
+            "score_deciles": audit_log.score_decile_summary(app.state.db_path),
+        }
+
+    @app.get("/cases")
+    def list_cases(limit: int = 50):
+        """Pending human-review queue: transactions routed to step_up_review
+        that haven't been resolved by an analyst yet."""
+        return {"cases": audit_log.list_pending_cases(app.state.db_path, limit=limit)}
+
+    @app.post("/cases/{case_id}/resolve")
+    def resolve_case(case_id: int, payload: ResolveCasePayload):
+        if payload.verdict not in ("approve", "decline"):
+            raise HTTPException(status_code=400, detail="verdict must be 'approve' or 'decline'")
+
+        resolved = audit_log.resolve_case(
+            app.state.db_path, case_id, verdict=payload.verdict, is_actual_fraud=payload.is_actual_fraud
+        )
+        if not resolved:
+            raise HTTPException(status_code=404, detail="case not found")
+
+        return {"case_id": case_id, "verdict": payload.verdict}
 
     return app
 
