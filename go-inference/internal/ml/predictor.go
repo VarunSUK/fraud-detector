@@ -398,6 +398,13 @@ type MLServicePredictor struct {
 	healthy         bool
 	loadedModels    []string
 	lastHealthCheck time.Time
+
+	// refreshMu serializes refreshHealth calls. Without it, every concurrent
+	// request that observes a stale cache fires its own redundant health
+	// check against the sidecar at once (a thundering herd) -- observed
+	// under k6 load testing as a real source of tail latency, not just a
+	// theoretical concern.
+	refreshMu sync.Mutex
 }
 
 // NewMLServicePredictor creates a predictor backed by the ml-serving sidecar at baseURL.
@@ -449,12 +456,29 @@ func (p *MLServicePredictor) IsLoaded() bool {
 	p.mu.RUnlock()
 
 	if stale {
-		p.refreshHealth()
+		p.refreshHealthOnce()
 	}
 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.healthy
+}
+
+// refreshHealthOnce ensures only one goroutine actually calls the sidecar at
+// a time. Concurrent callers block briefly on refreshMu and then see the
+// freshly refreshed state instead of each firing their own request.
+func (p *MLServicePredictor) refreshHealthOnce() {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+
+	p.mu.RLock()
+	stillStale := time.Since(p.lastHealthCheck) > mlServiceHealthCheckInterval
+	p.mu.RUnlock()
+	if !stillStale {
+		return // another goroutine already refreshed while we were waiting
+	}
+
+	p.refreshHealth()
 }
 
 type mlServicePredictResponse struct {

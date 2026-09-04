@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"fraud-detection-inference/internal/models"
 	"github.com/sirupsen/logrus"
@@ -304,6 +307,44 @@ func TestMLServicePredictor_DegradedWhenNoModelsLoaded(t *testing.T) {
 	predictor := NewMLServicePredictor(testLogger(), server.URL)
 	if predictor.IsLoaded() {
 		t.Error("expected predictor to report not loaded when sidecar has no models")
+	}
+}
+
+func TestMLServicePredictor_ConcurrentIsLoadedDoesNotStampede(t *testing.T) {
+	var healthCheckCount int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			atomic.AddInt64(&healthCheckCount, 1)
+			time.Sleep(20 * time.Millisecond) // simulate a slow sidecar under load
+			json.NewEncoder(w).Encode(mlServiceHealthResponse{Status: "healthy", ModelsLoaded: []string{"lightgbm"}})
+		}
+	}))
+	defer server.Close()
+
+	predictor := NewMLServicePredictor(testLogger(), server.URL)
+	// Force the cache stale so the next round of IsLoaded() calls all race to refresh.
+	predictor.mu.Lock()
+	predictor.lastHealthCheck = time.Time{}
+	predictor.mu.Unlock()
+	atomic.StoreInt64(&healthCheckCount, 0)
+
+	var wg sync.WaitGroup
+	const concurrency = 50
+	wg.Add(concurrency)
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			defer wg.Done()
+			predictor.IsLoaded()
+		}()
+	}
+	wg.Wait()
+
+	// NewMLServicePredictor already made one call at construction; a stale
+	// cache hit by 50 concurrent goroutines should trigger exactly one more,
+	// not up to 50 (the thundering-herd bug this test guards against).
+	count := atomic.LoadInt64(&healthCheckCount)
+	if count != 1 {
+		t.Errorf("health check called %d times for 50 concurrent stale reads, want exactly 1", count)
 	}
 }
 

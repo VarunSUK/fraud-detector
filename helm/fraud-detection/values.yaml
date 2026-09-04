@@ -162,6 +162,109 @@ inferenceAPI:
     timeoutSeconds: 3
     failureThreshold: 3
 
+# ML Serving Sidecar (loads trained models, serves /predict /explain /decision /cases /analytics)
+# NOTE: the audit log is SQLite, a single-writer store. Keep replicaCount at 1
+# until it's swapped for a real database (e.g. Postgres) -- multiple pods
+# writing to the same SQLite file on a shared volume will corrupt it.
+mlServing:
+  enabled: true
+  image:
+    repository: fraud-detection-ml-serving
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  env:
+    - name: PYTHONUNBUFFERED
+      value: "1"
+    - name: MODELS_DIR
+      value: "/app/models"
+    - name: AUDIT_DB_PATH
+      value: "/app/audit/audit_log.db"
+  volumeMounts:
+    - name: models-volume
+      mountPath: /app/models
+    - name: audit-volume
+      mountPath: /app/audit
+  volumes:
+    - name: models-volume
+      persistentVolumeClaim:
+        claimName: ml-models-pvc
+    - name: audit-volume
+      persistentVolumeClaim:
+        claimName: ml-audit-pvc
+  healthCheck:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Frontend: decision console, review queue, and analytics dashboard.
+# VITE_API_BASE_URL is baked into the static bundle at image-build time (see
+# frontend/Dockerfile's build arg) rather than injected at pod startup -- the
+# simplest thing that works for a single ingress host. Swapping to a
+# runtime-config.js fetched before the app boots is the usual next step if
+# the same image needs to serve multiple environments.
+frontend:
+  enabled: true
+  image:
+    repository: fraud-detection-frontend
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+  ingress:
+    enabled: true
+    className: "nginx"
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    hosts:
+      - host: fraud-detection.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: fraud-detection-frontend-tls
+        hosts:
+          - fraud-detection.example.com
+  resources:
+    limits:
+      cpu: 250m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
 # Data Generator Service
 dataGenerator:
   enabled: true
@@ -309,6 +412,7 @@ persistence:
   size:
     models: 10Gi
     data: 20Gi
+    auditLog: 1Gi
 
 # Service Account
 serviceAccount:

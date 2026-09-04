@@ -171,7 +171,7 @@ Thumbs.db
 *.kubeconfig
 
 # Helm
-charts/*.tgz
+**/charts/*.tgz
 
 # Model files (large binary files)
 *.joblib

@@ -25,6 +25,48 @@ spec:
 {{- end }}
 
 ---
+{{- if .Values.mlServing.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-ml-serving
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: ml-serving
+spec:
+  type: {{ .Values.mlServing.service.type }}
+  ports:
+    - port: {{ .Values.mlServing.service.port }}
+      targetPort: {{ .Values.mlServing.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "fraud-detection.selectorLabels" . | nindent 4 }}
+    component: ml-serving
+{{- end }}
+
+---
+{{- if .Values.frontend.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-frontend
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: frontend
+spec:
+  type: {{ .Values.frontend.service.type }}
+  ports:
+    - port: {{ .Values.frontend.service.port }}
+      targetPort: {{ .Values.frontend.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "fraud-detection.selectorLabels" . | nindent 4 }}
+    component: frontend
+{{- end }}
+
+---
 {{- if and .Values.kafka.enabled }}
 apiVersion: v1
 kind: Service

@@ -1,0 +1,68 @@
+# Advanced Helm configuration example.
+#
+# Layer this on top of a cloud values file: values overrides merge, they
+# don't replace, so this only needs to specify what you're actually changing.
+#
+#   helm install fraud-detection ./helm/fraud-detection \
+#     -f helm/fraud-detection/values-aws.yaml \
+#     -f examples/advanced-config.yaml
+#
+# This example: scale up the inference API for a higher-traffic production
+# environment, keep ml-serving at 1 replica (required -- see docs/deployment.md
+# § "The SQLite constraint"), and point the frontend/API ingress at real hosts.
+
+inferenceAPI:
+  replicaCount: 6
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+  ingress:
+    hosts:
+      - host: api.fraud-detection.yourcompany.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: fraud-detection-api-tls
+        hosts:
+          - api.fraud-detection.yourcompany.com
+
+mlServing:
+  # Do not raise this without first swapping the SQLite audit log for a
+  # real database -- see docs/deployment.md.
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+
+frontend:
+  replicaCount: 3
+  ingress:
+    hosts:
+      - host: fraud-detection.yourcompany.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: fraud-detection-frontend-tls
+        hosts:
+          - fraud-detection.yourcompany.com
+
+# Rebuild the frontend image with the matching build arg before deploying
+# this, since VITE_API_BASE_URL is compiled into the static bundle:
+#   docker build --build-arg VITE_API_BASE_URL=https://api.fraud-detection.yourcompany.com \
+#     -t fraud-detection-frontend:latest ./frontend
+
+monitoring:
+  prometheus:
+    server:
+      persistentVolume:
+        size: 100Gi

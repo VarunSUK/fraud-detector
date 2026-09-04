@@ -138,13 +138,11 @@ fraud-detection/
 │   │   ├── 📁 dashboards/    # Custom dashboards
 │   │   └── 📁 provisioning/  # Auto-provisioning config
 │   └── 📁 dashboards/        # Additional monitoring configs
-├── 📁 k8s/                   # Kubernetes Manifests
-│   ├── 📁 manifests/         # K8s resource definitions
-│   ├── 📁 configs/          # Configuration files
-│   ├── configmaps.yaml      # ConfigMaps
+├── 📁 k8s/                   # Raw Kubernetes manifests (non-Helm path)
+│   ├── configmaps.yaml      # ConfigMaps (Prometheus scrape config, etc.)
 │   ├── secrets.yaml         # Secrets
 │   └── namespaces.yaml      # Namespace definitions
-├── 📁 helm/                  # Helm Charts
+├── 📁 helm/                  # Helm Charts (inference-api, ml-serving, frontend, ml-training, data-generator + Kafka/Redis/Prometheus/Grafana)
 │   └── 📁 fraud-detection/   # Main Helm chart
 │       ├── 📁 templates/     # K8s templates
 │       ├── Chart.yaml        # Chart metadata
@@ -617,38 +615,28 @@ All four run in CI on every push -- see `.github/workflows/ci.yml`.
 
 ### Integration Tests
 ```bash
-# Start test environment
-docker-compose -f docker-compose.test.yml up -d
-
-# Run integration tests
 ./scripts/run-integration-tests.sh
 ```
+Trains a small real model set, boots the ml-serving sidecar and go-inference as real local processes (no Docker needed), and exercises the actual HTTP contract between them end to end -- health, score, explain, decision, cases, analytics, and the real `/metrics` Prometheus output. Cleans up after itself.
+
+`./scripts/run-tests.sh` runs this plus all four unit test suites (Go, Python, frontend, analytics SQL) in one command.
 
 ### Load Testing
 ```bash
-# Install k6
-curl https://github.com/grafana/k6/releases/download/v0.40.0/k6-v0.40.0-linux-amd64.tar.gz -L | tar xvz --strip-components 1
-
-# Run load tests
+brew install k6   # or see https://k6.io/docs/get-started/installation/
 k6 run tests/load-test.js
+# against a non-local target:
+BASE_URL=https://staging.example.com k6 run tests/load-test.js
 ```
+Targets `/api/v1/score` specifically, not `/api/v1/decision` -- see [docs/deployment.md](docs/deployment.md) for why decision (which writes to the SQLite audit log on every call) isn't the thing to hammer with concurrent virtual users. This test is also what surfaced a real thundering-herd bug in the sidecar health-check cache under concurrent load -- see [docs/troubleshooting.md](docs/troubleshooting.md).
 
-## 🚀 Performance Benchmarks
+## 🚀 Performance
 
-### Latency (P95)
-- **Rule-based**: 5ms
-- **ML Model**: 45ms
-- **Ensemble**: 50ms
+Run `k6 run tests/load-test.js` (see [Load Testing](#load-testing) above) against your own environment for real numbers -- hardware, model size, and network topology (same-host vs. cross-AZ sidecar calls) all matter enough that a single "the system does Xms" claim isn't meaningful without them. What we can say from actually running it during development:
 
-### Throughput
-- **Single Instance**: 1,000 requests/second
-- **3 Replicas**: 3,000 requests/second
-- **Auto-scaled**: 10,000+ requests/second
-
-### Accuracy
-- **LightGBM**: 99.2% AUC
-- **XGBoost**: 99.1% AUC
-- **Ensemble**: 99.3% AUC
+- Per-request latency is dominated by the go-inference → ml-serving HTTP hop and the SHAP computation inside it, not by the rule-based path or the network itself.
+- Under concurrent load, a stale-cache thundering-herd bug in the sidecar health check caused real, measurable tail-latency spikes -- see [docs/troubleshooting.md](docs/troubleshooting.md) for the finding and the fix (`TestMLServicePredictor_ConcurrentIsLoadedDoesNotStampede` guards against a regression). That's the kind of thing load testing is for: it's a genuine bug the unit tests couldn't have caught.
+- Accuracy numbers (AUC, etc.) depend entirely on the dataset you train on -- `python-ml/src/synthetic_creditcard.py`'s toy data is deliberately *not* meant to produce an impressive-looking AUC (see [docs/ml-pipeline.md](docs/ml-pipeline.md) for why); train against the real Kaggle creditcard.csv or your own data for numbers worth reporting.
 
 ## 🔒 Security Considerations
 

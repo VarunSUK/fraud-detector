@@ -38,8 +38,12 @@ spec:
             {{- toYaml .Values.mlTraining.resources | nindent 12 }}
           volumeMounts:
             {{- toYaml .Values.mlTraining.volumeMounts | nindent 12 }}
+            - name: tmp
+              mountPath: /tmp
       volumes:
         {{- toYaml .Values.mlTraining.volumes | nindent 8 }}
+        - name: tmp
+          emptyDir: {}
 {{- end }}
 
 ---
@@ -82,6 +86,10 @@ spec:
               protocol: TCP
           env:
             {{- toYaml .Values.inferenceAPI.env | nindent 12 }}
+            {{- if .Values.mlServing.enabled }}
+            - name: ML_SERVICE_URL
+              value: "http://{{ include "fraud-detection.fullname" . }}-ml-serving:{{ .Values.mlServing.service.port }}"
+            {{- end }}
           {{- if .Values.inferenceAPI.healthCheck.enabled }}
           livenessProbe:
             httpGet:
@@ -106,6 +114,167 @@ spec:
             {{- toYaml .Values.inferenceAPI.volumeMounts | nindent 12 }}
       volumes:
         {{- toYaml .Values.inferenceAPI.volumes | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+---
+{{- if .Values.mlServing.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-ml-serving
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: ml-serving
+spec:
+  replicas: {{ .Values.mlServing.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: ml-serving
+  template:
+    metadata:
+      labels:
+        {{- include "fraud-detection.selectorLabels" . | nindent 8 }}
+        component: ml-serving
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "fraud-detection.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ml-serving
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.mlServing.image.repository }}:{{ .Values.mlServing.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.mlServing.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            {{- toYaml .Values.mlServing.env | nindent 12 }}
+          {{- if .Values.mlServing.healthCheck.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.mlServing.healthCheck.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.mlServing.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mlServing.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.mlServing.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.mlServing.livenessProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.mlServing.healthCheck.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.mlServing.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mlServing.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.mlServing.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.mlServing.readinessProbe.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.mlServing.resources | nindent 12 }}
+          volumeMounts:
+            {{- toYaml .Values.mlServing.volumeMounts | nindent 12 }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- toYaml .Values.mlServing.volumes | nindent 8 }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+---
+{{- if .Values.frontend.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-frontend
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "fraud-detection.selectorLabels" . | nindent 8 }}
+        component: frontend
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "fraud-detection.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: frontend
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: {{ .Values.frontend.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.frontend.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.frontend.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.frontend.readinessProbe.failureThreshold }}
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          # nginx-unprivileged still needs a few writable paths even though it
+          # doesn't run as root; these stay writable under readOnlyRootFilesystem
+          # without weakening it for the rest of the container.
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -161,7 +330,11 @@ spec:
             {{- toYaml .Values.dataGenerator.resources | nindent 12 }}
           volumeMounts:
             {{- toYaml .Values.dataGenerator.volumeMounts | nindent 12 }}
+            - name: tmp
+              mountPath: /tmp
       volumes:
         {{- toYaml .Values.dataGenerator.volumes | nindent 8 }}
+        - name: tmp
+          emptyDir: {}
 {{- end }}
 
