@@ -8,6 +8,28 @@
 
 A **production-ready, enterprise-grade fraud detection system** that demonstrates advanced MLOps capabilities with real-time inference, comprehensive monitoring, and cloud-native deployment. This system combines machine learning models with rule-based detection to provide sub-100ms fraud scoring for financial transactions.
 
+## Why This Exists
+
+I didn't build this just to have a fraud model to point at. "I trained a classifier that gets 99% AUC" is a portfolio line that means almost nothing on its own — anyone can overfit a notebook. What I actually wanted was something end to end: a model that's actually being called by a real service, a score that turns into an actual decision, and a system I could poke at, break, and fix, the same way it would go at an actual job.
+
+It started as a fairly typical ML project skeleton — a training script, a Go API, some Kubernetes YAML, a README describing a system a lot more finished than what was actually running. Closing that gap between what a project *claims* and what it *does* when you actually run it turned out to be most of the real work, and most of what I learned.
+
+## What I Actually Learned Building This
+
+**A trained model isn't a product.** The inference service originally scored every transaction with a hardcoded mock — a few if/else thresholds pretending to be machine learning — while the real LightGBM/XGBoost training pipeline sat completely disconnected from it, never actually called. Wiring the two together properly (a real serving layer, health checks, graceful fallback when that service is unreachable) was a bigger and more interesting problem than training the model in the first place.
+
+**A raw score is not a decision.** `0.74` doesn't tell a credit risk analyst anything they can act on. Turning that into "decline this transaction, tighten this account's credit limit by 30%, here's why" — reason codes, an actual policy, an audit trail someone could review later — is where the real judgment lives, and it's a different skill entirely from training a classifier.
+
+**"It compiles" and "it runs" are not the same claim.** At one point the Go service had two HTTP routes registered on the same path and panicked immediately on startup — the "production-ready" service in this repo had never actually been started successfully before I first ran it myself. Tests that exercise the real router, not just individual functions in isolation, are what caught it.
+
+**Calibration matters more than model choice.** Swapping one gradient booster for another changes a metric on a slide. Realizing that neither one's raw output is a real probability — and that a policy which says "auto-decline above 0.85" is meaningless until the score is actually calibrated to that scale — changed how the whole scoring pipeline is built.
+
+**Concurrency bugs hide behind averages.** A load test looked fine on the median response time; it was the tail latency that gave away a thundering-herd bug, where every simultaneous request was independently re-checking a downstream service's health instead of sharing one result. Invisible until something asked for numbers instead of a single successful response.
+
+**Security hardening has real, boring consequences.** Turning on a hardened, non-root, read-only-filesystem pod security policy in Kubernetes broke nginx outright (it wants to bind port 80 as root) and would have quietly broken the Python services too, since `/tmp` isn't writable on a read-only root by default. None of that shows up until you actually try to run the pods — it's easy to declare in YAML and never once verify.
+
+If there's one thread through all of it: a project that *looks* finished and a project that actually *works* are two different bars, and the distance between them is almost always in the parts nobody draws on the architecture diagram.
+
 ## 🏗️ Architecture Overview
 
 ```mermaid
