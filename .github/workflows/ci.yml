@@ -30,8 +30,8 @@ jobs:
             echo "$fmt_out"
             exit 1
           fi
-      - name: Test
-        run: go test ./... -v
+      - name: Test (with race detector)
+        run: go test -race ./... -v
 
   python-tests:
     name: Python ML pipeline
