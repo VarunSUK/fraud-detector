@@ -7,12 +7,21 @@
 #     -f helm/fraud-detection/values-aws.yaml \
 #     -f examples/advanced-config.yaml
 #
-# This example: scale up the inference API for a higher-traffic production
-# environment, keep ml-serving at 1 replica (required -- see docs/deployment.md
-# § "The SQLite constraint"), and point the frontend/API ingress at real hosts.
+# This example: raise the inference API's autoscaling ceiling for a
+# higher-traffic production environment, keep ml-serving at 1 replica
+# (required -- see docs/deployment.md § "The SQLite constraint"), and point
+# the frontend/API ingress at real hosts.
+#
+# Both inferenceAPI and frontend default to autoscaling.enabled: true, which
+# means the Deployment's replicas field is left unset and the
+# HorizontalPodAutoscaler owns the actual replica count -- setting
+# replicaCount alone here would do nothing, since the HPA overwrites it on
+# its next reconcile.
 
 inferenceAPI:
-  replicaCount: 6
+  autoscaling:
+    minReplicas: 4
+    maxReplicas: 20
   resources:
     limits:
       cpu: 2000m
@@ -44,7 +53,9 @@ mlServing:
       memory: 2Gi
 
 frontend:
-  replicaCount: 3
+  autoscaling:
+    minReplicas: 3
+    maxReplicas: 10
   ingress:
     hosts:
       - host: fraud-detection.yourcompany.com

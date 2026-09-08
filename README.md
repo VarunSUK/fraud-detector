@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/badge/Go-1.19+-blue.svg)](https://golang.org/)
-[![Python Version](https://img.shields.io/badge/Python-3.9+-green.svg)](https://python.org/)
+[![Python Version](https://img.shields.io/badge/Python-3.12+-green.svg)](https://python.org/)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.20+-blue.svg)](https://kubernetes.io/)
 [![Docker](https://img.shields.io/badge/Docker-20.10+-blue.svg)](https://docker.com/)
 
@@ -78,11 +78,11 @@ graph TB
 
 ### 🔬 Advanced Machine Learning
 - **Ensemble Learning**: Combines LightGBM, XGBoost, and an unsupervised Isolation Forest anomaly detector, blended into a single weighted score
-- **Class Imbalance Handling**: SMOTE, class weights, and balanced sampling techniques
+- **Class Imbalance Handling**: `class_weight='balanced'` for LightGBM, a computed `scale_pos_weight` for XGBoost
 - **Probability Calibration**: `CalibratedClassifierCV` (Platt scaling) so scores are real probabilities a policy can threshold, not raw GBM margins
 - **Feature Engineering**: 20+ derived features including time-based, amount-based, and statistical features
 - **Model Interpretability**: Real per-transaction SHAP values (`shap.TreeExplainer`), not a global-importance heuristic
-- **Cross-Validation**: Stratified K-fold validation for robust model evaluation
+- **Validation**: A single stratified train/validation/test split (not k-fold cross-validation -- see [docs/ml-pipeline.md](docs/ml-pipeline.md) for why that split exists twice, once for early stopping and once for calibration)
 
 ### 💳 Credit Risk Decisioning
 - **Actionable Decisions**: Turns a fraud score into approve / step-up-review / decline, not just a probability
@@ -100,18 +100,19 @@ graph TB
 - **Health Monitoring**: Comprehensive health checks and status endpoints
 
 ### 📊 Production Monitoring
-- **Real-time Metrics**: Prometheus integration with custom fraud detection metrics
+- **Real-time Metrics**: Prometheus integration with custom fraud detection metrics, scraped from a real `/metrics` endpoint (`promhttp.Handler()`, not a JSON stub)
 - **Performance Dashboards**: Grafana visualization for system health
-- **Model Drift Detection**: Automated monitoring of model performance degradation
-- **Alerting**: Configurable alerts for system anomalies
-- **Distributed Tracing**: Request tracing across microservices
+- **Model Drift Detection**: `audit_log.score_drift_summary()` computes the Population Stability Index between the last 7 days of scores and the 7 days before that, surfaced live on the Analytics tab (see [docs/ml-pipeline.md](docs/ml-pipeline.md))
+- **Alerting**: Real Prometheus alert rules (`monitoring/prometheus/alert_rules.yml`), not just a mention of the concept -- service-down, elevated error rate, p95 latency, and fraud-rate-spike alerts, checked with `promtool`
+- Request tracing across services isn't implemented. Adding it properly means an OpenTelemetry collector and trace-context propagation across the Go/Python HTTP boundary, which is a real infrastructure addition, not something to half-build for a README bullet.
 
 ### ☁️ Cloud-Native Deployment
-- **Multi-Cloud Support**: AWS EKS, GCP GKE, Azure AKS
-- **Auto-scaling**: Horizontal Pod Autoscaler based on CPU/memory usage
-- **Service Mesh Ready**: Compatible with Istio for advanced networking
-- **Security**: RBAC, network policies, and secrets management
-- **CI/CD Integration**: GitOps-ready with ArgoCD support
+- **Multi-Cloud Support**: AWS EKS, GCP GKE, Azure AKS, with per-cloud IAM annotations in `values-aws.yaml` / `values-gcp.yaml` / `values-azure.yaml`
+- **Auto-scaling**: A real `HorizontalPodAutoscaler` for `inference-api` and `frontend` (`templates/hpa.yaml`); `ml-serving` intentionally has none, since its SQLite audit log is single-writer (see [docs/deployment.md](docs/deployment.md#the-sqlite-constraint))
+- **Network Policies**: `templates/networkpolicy.yaml` restricts which of this chart's own pods can reach which other one (only `inference-api` can reach `ml-serving`; nothing else can), verified with `helm template`, not just declared
+- **Secrets Management**: Kubernetes Secrets (`k8s/secrets.yaml`) for credentials that shouldn't live in ConfigMaps
+- **GitOps**: A real Argo CD `Application` manifest (`argocd/application.yaml`) pointing at this chart, not just a mention of ArgoCD compatibility
+- None of these services call the Kubernetes API, so there's no RBAC `Role`/`RoleBinding` to speak of, and no Istio-specific configuration exists. Nothing here prevents running behind a service mesh (it's an ordinary set of Deployments and Services), but "Istio compatible" isn't a feature this chart implements.
 
 ## 📁 Project Structure
 
@@ -151,7 +152,6 @@ fraud-detection/
 │   └── run_report.py            # Runs the .sql files against the audit log and prints them
 ├── 📁 data-generator/          # Data Generation Service
 │   ├── 📁 src/                # Source code
-│   ├── 📁 config/             # Configuration files
 │   ├── requirements.txt       # Python dependencies
 │   └── Dockerfile            # Data generator container
 ├── 📁 monitoring/             # Monitoring Stack
@@ -187,7 +187,7 @@ fraud-detection/
 ## 🛠️ Technology Stack
 
 ### Machine Learning
-- **Python 3.9+**: Core ML development
+- **Python 3.12+**: Core ML development
 - **LightGBM**: Gradient boosting framework
 - **XGBoost**: Extreme gradient boosting
 - **scikit-learn**: ML utilities and preprocessing
@@ -227,7 +227,7 @@ fraud-detection/
   - Local: [minikube](https://minikube.sigs.k8s.io/), [kind](https://kind.sigs.k8s.io/), or [k3s](https://k3s.io/)
   - Cloud: AWS EKS, GCP GKE, or Azure AKS
 - **Helm 3.x**: Package manager for Kubernetes
-- **Python 3.9+**: For ML training
+- **Python 3.12+**: For ML training
 - **Go 1.19+**: For inference service
 - **kubectl**: Kubernetes command-line tool
 
@@ -520,36 +520,32 @@ Scores a transaction, applies the credit risk policy, records it to the audit lo
 #### 📈 Analytics Summary
 **GET** `/api/v1/analytics/summary`
 
-Live approval funnel and fraud-rate-by-score-decile breakdown, computed from the audit log (same queries as `analytics/sql/approval_funnel.sql` and `loss_rate_by_score_decile.sql`). For deeper ad hoc analysis -- threshold trade-offs, review queue aging -- run `python analytics/run_report.py` directly against the database.
+Live approval funnel, fraud-rate-by-score-decile breakdown, and score drift (Population Stability Index), computed from the audit log (same queries as `analytics/sql/approval_funnel.sql` and `loss_rate_by_score_decile.sql`, plus `audit_log.score_drift_summary()`). For deeper ad hoc analysis -- threshold trade-offs, review queue aging -- run `python analytics/run_report.py` directly against the database.
 
 ## 📊 Monitoring & Observability
 
 ### Prometheus Metrics
 
-The system exposes comprehensive metrics:
+Real metrics from a real `/metrics` endpoint (`promhttp.Handler()`), not a placeholder:
 
-- **Request Metrics**: `fraud_detection_requests_total`, `fraud_detection_request_duration_seconds`
-- **Prediction Metrics**: `fraud_detection_predictions_total`
+- **Request Metrics**: `fraud_detection_requests_total` (by endpoint, method, status), `fraud_detection_request_duration_seconds` (histogram, for percentile latency)
+- **Prediction Metrics**: `fraud_detection_predictions_total` (by model, prediction)
 - **Model Metrics**: `fraud_detection_model_load_time_seconds`
-- **System Metrics**: CPU, memory, disk usage
+- **Runtime Metrics**: Go's default process and runtime collectors (CPU, memory, goroutines) come for free from the same registry
 
 ### Grafana Dashboards
 
-Access Grafana at `http://localhost:3000` (admin/admin) to view:
+Access Grafana at `http://localhost:3000` (admin/admin) for `monitoring/grafana/dashboards/ml-performance.json`: request rate by endpoint, 5xx error rate, scoring latency (p50/p95/p99), prediction distribution by model, predicted fraud rate, and model load time. Every panel queries one of the metrics listed above, so nothing on it will read "No data."
 
-- **Real-time Fraud Detection**: Transaction volume, fraud rate, model performance
-- **System Performance**: Latency, throughput, error rates
-- **Model Health**: Model accuracy, drift detection, feature importance
-- **Infrastructure**: Resource utilization, pod health, network metrics
+Score drift and fraud-rate-by-decile (which need the audit log, not Prometheus) live on the frontend's Analytics tab instead -- see [ml-pipeline.md § Model Drift Detection](docs/ml-pipeline.md#model-drift-detection).
 
 ### Alerting Rules
 
-Configure alerts for:
-- High fraud rate (>5%)
-- Model accuracy degradation (>10% drop)
-- High latency (>200ms)
-- Service unavailability
-- Resource exhaustion
+Real rules in `monitoring/prometheus/alert_rules.yml`, checked with `promtool check rules`:
+- `InferenceServiceDown`: the service hasn't been scraped in 1 minute
+- `HighErrorRate`: 5xx rate above 5% for 5+ minutes
+- `HighScoringLatencyP95`: p95 scoring latency above 200ms for 5+ minutes
+- `FraudRateSpike`: predicted fraud rate above 20% for 10+ minutes
 
 ## 🔧 Configuration
 
@@ -663,21 +659,19 @@ Run `k6 run tests/load-test.js` (see [Load Testing](#load-testing) above) agains
 ## 🔒 Security Considerations
 
 ### Data Protection
-- **Encryption at Rest**: All data encrypted using AES-256
-- **Encryption in Transit**: TLS 1.3 for all communications
-- **PII Handling**: No sensitive data stored in logs
-- **Data Retention**: Configurable retention policies
+- **Encryption in Transit**: The ingress templates carry TLS blocks wired to cert-manager (`cert-manager.io/cluster-issuer` annotations); this depends on cert-manager actually being installed in the target cluster, it isn't self-managed by this chart
+- **Encryption at Rest**: Not configured by this project directly -- left to the cloud provider's default block storage encryption (EBS/PD/Managed Disks) under the PVCs, not something the application layer does
+- **PII Handling**: Logs use structured fields (`transaction_id`, `model`, `score`) rather than dumping full request bodies, so raw card/account data doesn't end up in log output
+- **Data Retention**: Prometheus has a real retention window (`--storage.tsdb.retention.time=200h` in `docker-compose.yml`); the SQLite audit log has no retention or purge policy today, so it grows unbounded
 
 ### Access Control
-- **RBAC**: Role-based access control in Kubernetes
-- **Network Policies**: Restrictive network policies
-- **Service Accounts**: Dedicated service accounts for each component
-- **Secrets Management**: Kubernetes secrets or external secret managers
+- **Network Policies**: Real, chart-scoped policies (`templates/networkpolicy.yaml`) -- see [docs/deployment.md § Network policy](docs/deployment.md#network-policy) for exactly what's restricted
+- **Service Accounts**: A single dedicated service account for the chart (not the `default` namespace service account); since none of these workloads call the Kubernetes API, there's no RBAC `Role`/`RoleBinding` to speak of
+- **Secrets Management**: Kubernetes Secrets (`k8s/secrets.yaml`)
 
 ### Model Security
-- **Model Signing**: Cryptographic signatures for model integrity
-- **Version Control**: Immutable model versions
-- **Access Logging**: Comprehensive audit trails
+- **Access Logging**: Every scored decision is written to the audit log (`audit_log.record_decision`) with the score, action, and reason codes -- a real, queryable trail, not a logging aspiration
+- Model artifact versioning (a model registry, signed artifacts, immutable version history) isn't implemented -- training code is versioned in git like everything else, but the trained `.joblib` files in `MODELS_DIR` are just overwritten on each retrain
 - **Input Validation**: Strict input validation and sanitization
 
 ## 🤝 Contributing

@@ -189,10 +189,31 @@ type ScoreDecileRow struct {
 	FraudRatePct        float64 `json:"fraud_rate_pct"`
 }
 
+// DriftDecileRow compares one score decile's share of the baseline window
+// against its share of the recent window.
+type DriftDecileRow struct {
+	ScoreDecile int     `json:"score_decile"`
+	BaselinePct float64 `json:"baseline_pct"`
+	RecentPct   float64 `json:"recent_pct"`
+}
+
+// DriftSummary is the Population Stability Index between a recent scoring
+// window and the baseline window before it. Unlike ScoreDecileRow, this
+// doesn't require ground-truth fraud labels, so it can run continuously
+// against live traffic.
+type DriftSummary struct {
+	PSI            float64          `json:"psi"`
+	Interpretation string           `json:"interpretation"`
+	BaselineCount  int64            `json:"baseline_count"`
+	RecentCount    int64            `json:"recent_count"`
+	Deciles        []DriftDecileRow `json:"deciles"`
+}
+
 // AnalyticsSummary is the live model-evaluation/decisioning summary for the dashboard.
 type AnalyticsSummary struct {
 	Funnel       []FunnelRow      `json:"funnel"`
 	ScoreDeciles []ScoreDecileRow `json:"score_deciles"`
+	Drift        DriftSummary     `json:"drift"`
 }
 
 // HealthResponse represents the health check response

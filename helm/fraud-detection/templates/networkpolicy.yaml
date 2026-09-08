@@ -1,0 +1,140 @@
+{{/*
+These policies cover only the workloads this chart directly owns
+(inference-api, ml-serving, frontend, data-generator, ml-training). They
+deliberately don't attempt a namespace-wide default-deny or try to identify
+the cluster's ingress controller by namespace label, since both vary enough
+across real clusters that a wrong guess here would silently break traffic
+that "worked" in one environment and not another. What's enforced instead
+is real: which of *our* components can reach which other one, and nothing
+in this chart is allowed to reach ml-serving except inference-api.
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+
+{{- if .Values.mlServing.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-ml-serving
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: ml-serving
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: ml-serving
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only inference-api is allowed to call the sidecar. Nothing else in the
+    # cluster (or outside it) can reach ml-serving directly.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "fraud-detection.selectorLabels" . | nindent 14 }}
+              component: inference-api
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    {{- include "fraud-detection.dnsEgress" . | nindent 4 }}
+{{- end }}
+
+---
+{{- if .Values.inferenceAPI.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-inference-api
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: inference-api
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: inference-api
+  policyTypes:
+    - Egress
+  # No ingress rule: this is the public-facing service (reached via Ingress),
+  # and there's no portable way to name "the ingress controller" across
+  # clusters here -- leaving ingress unrestricted for this one workload
+  # rather than guessing wrong. The real value is on the egress side: a
+  # compromised inference-api pod can reach ml-serving and DNS, nothing else
+  # -- not Kafka, not Redis, not the internet.
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "fraud-detection.selectorLabels" . | nindent 14 }}
+              component: ml-serving
+      ports:
+        - protocol: TCP
+          port: 8000
+    {{- include "fraud-detection.dnsEgress" . | nindent 4 }}
+{{- end }}
+
+---
+{{- if .Values.frontend.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-frontend
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: frontend
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: frontend
+  policyTypes:
+    - Egress
+  # The frontend is a static bundle served by nginx; the browser calls
+  # inference-api directly, so the pod itself has no backend to reach.
+  egress:
+    {{- include "fraud-detection.dnsEgress" . | nindent 4 }}
+{{- end }}
+
+---
+{{- if .Values.dataGenerator.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-data-generator
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: data-generator
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
+      component: data-generator
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.kafka.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9092
+    {{- end }}
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- end }}
+    {{- include "fraud-detection.dnsEgress" . | nindent 4 }}
+{{- end }}
+
+{{- end }}

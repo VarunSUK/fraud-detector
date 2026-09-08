@@ -1,0 +1,54 @@
+{{- if and .Values.inferenceAPI.enabled .Values.inferenceAPI.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-inference-api
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: inference-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "fraud-detection.fullname" . }}-inference-api
+  minReplicas: {{ .Values.inferenceAPI.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.inferenceAPI.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.inferenceAPI.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+
+---
+{{- if and .Values.frontend.enabled .Values.frontend.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "fraud-detection.fullname" . }}-frontend
+  labels:
+    {{- include "fraud-detection.labels" . | nindent 4 }}
+    component: frontend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "fraud-detection.fullname" . }}-frontend
+  minReplicas: {{ .Values.frontend.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.frontend.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.frontend.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+
+{{/*
+mlServing and mlTraining deliberately have no HPA: mlServing's audit log is
+SQLite (single-writer, see values.yaml's mlServing comment), and mlTraining
+is a run-to-completion job, not a horizontally-scalable service.
+*/}}

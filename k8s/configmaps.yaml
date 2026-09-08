@@ -9,6 +9,9 @@ data:
       scrape_interval: 15s
       evaluation_interval: 15s
 
+    rule_files:
+      - "/etc/prometheus/rules/alert_rules.yml"
+
     scrape_configs:
       - job_name: 'prometheus'
         static_configs:
@@ -34,6 +37,65 @@ data:
         static_configs:
           - targets: ['kafka:9092']
         scrape_interval: 30s
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alert-rules
+  namespace: monitoring
+data:
+  # Mirrors monitoring/prometheus/alert_rules.yml -- keep the two in sync.
+  # Mount at /etc/prometheus/rules/alert_rules.yml to match prometheus.yml's rule_files above.
+  alert_rules.yml: |
+    groups:
+      - name: fraud-detection-inference
+        rules:
+          - alert: InferenceServiceDown
+            expr: up{job="fraud-detection-inference"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Fraud detection inference API is down"
+              description: "Prometheus has not been able to scrape {{ $labels.instance }} for 1 minute."
+
+          - alert: HighErrorRate
+            expr: |
+              sum(rate(fraud_detection_requests_total{status=~"5.."}[5m]))
+              /
+              sum(rate(fraud_detection_requests_total[5m]))
+              > 0.05
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Elevated 5xx rate on the inference API"
+              description: "More than 5 percent of requests over the last 5 minutes returned a 5xx status."
+
+          - alert: HighScoringLatencyP95
+            expr: |
+              histogram_quantile(0.95, sum(rate(fraud_detection_request_duration_seconds_bucket{endpoint="score"}[5m])) by (le))
+              > 0.2
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "p95 scoring latency above 200ms"
+              description: "Sustained latency above 200ms usually means the ml-serving sidecar is degraded, not the Go service itself."
+
+          - alert: FraudRateSpike
+            expr: |
+              sum(rate(fraud_detection_predictions_total{prediction="1"}[15m]))
+              /
+              sum(rate(fraud_detection_predictions_total[15m]))
+              > 0.20
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Predicted fraud rate above 20 percent over 15 minutes"
+              description: "Either a genuine attack pattern or the model is misbehaving. Cross-check analytics/sql/approval_funnel.sql before treating this as confirmed fraud."
 
 ---
 apiVersion: v1

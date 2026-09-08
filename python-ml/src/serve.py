@@ -305,6 +305,7 @@ def create_app(models_dir: Optional[str] = None, db_path: Optional[str] = None) 
         return {
             "funnel": audit_log.funnel_summary(app.state.db_path),
             "score_deciles": audit_log.score_decile_summary(app.state.db_path),
+            "drift": audit_log.score_drift_summary(app.state.db_path),
         }
 
     @app.get("/cases")

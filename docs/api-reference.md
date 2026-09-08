@@ -71,7 +71,15 @@ Records an analyst's verdict.
 `verdict` must be `"approve"` or `"decline"`. `404` if the case doesn't exist. `is_actual_fraud` is optional -- set it when the true outcome is known, since it's what the analytics queries key off of.
 
 ### `GET /api/v1/analytics/summary`
-Live approval funnel and score-decile breakdown -- see [README § Analytics Summary](../README.md#-analytics-summary). For deeper analysis (threshold trade-offs, review queue aging), run `python analytics/run_report.py` directly against the audit database; that's intentionally not exposed as an API (see [ml-pipeline.md](./ml-pipeline.md) for why).
+Live approval funnel, score-decile breakdown, and score drift (Population Stability Index between the last 7 days and the 7 days before) -- see [README § Analytics Summary](../README.md#-analytics-summary) and [ml-pipeline.md § Model Drift Detection](./ml-pipeline.md#model-drift-detection). For deeper analysis (threshold trade-offs, review queue aging), run `python analytics/run_report.py` directly against the audit database; that's intentionally not exposed as an API (see [ml-pipeline.md](./ml-pipeline.md) for why).
+
+```json
+{
+  "funnel": [ { "action": "approve", "transaction_count": 756, "pct_of_volume": 94.26, "total_amount": 139024.01, "avg_fraud_score": 0.1038 } ],
+  "score_deciles": [ { "score_decile": 8, "transaction_count": 40, "confirmed_fraud_count": 39, "fraud_rate_pct": 97.5 } ],
+  "drift": { "psi": 0.31, "interpretation": "significant_shift", "baseline_count": 187, "recent_count": 98, "deciles": [ { "score_decile": 1, "baseline_pct": 95.19, "recent_pct": 88.78 } ] }
+}
+```
 
 ### `GET /metrics`
 Real Prometheus exposition format (`promhttp.Handler()`), not a JSON stub. Scraped by `monitoring/prometheus/prometheus.yml` at `inference-api:8080/metrics`. Exposes `fraud_detection_requests_total`, `fraud_detection_request_duration_seconds`, `fraud_detection_predictions_total`, `fraud_detection_model_load_time_seconds`, plus the Go runtime/process default collectors.

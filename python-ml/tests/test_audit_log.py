@@ -99,3 +99,70 @@ def test_funnel_and_decile_summaries(tmp_path):
     assert sum(row["transaction_count"] for row in deciles) == 2
     high_decile = next(row for row in deciles if row["score_decile"] == 9)
     assert high_decile["confirmed_fraud_count"] == 1
+
+
+def _record_at(db_path, transaction_id, fraud_score, created_at):
+    audit_log.record_decision(
+        db_path,
+        transaction_id=transaction_id,
+        amount=100,
+        fraud_score=fraud_score,
+        action="approve" if fraud_score < 0.5 else "decline",
+        risk_tier="low",
+        reason_codes=["WITHIN_POLICY"],
+        model_scores={"lightgbm": fraud_score},
+        credit_limit_current=5000,
+        credit_limit_recommended=5000,
+        created_at=created_at,
+    )
+
+
+def test_score_drift_summary_stable_when_distributions_match(tmp_path):
+    db_path = str(tmp_path / "audit.db")
+    now = 1_700_000_000.0
+    recent_start = now - 7 * 86400
+    baseline_start = recent_start - 7 * 86400
+
+    # Same low-score distribution in both windows.
+    for i in range(20):
+        _record_at(db_path, f"baseline_{i}", 0.1, baseline_start + i * 60)
+        _record_at(db_path, f"recent_{i}", 0.1, recent_start + i * 60)
+
+    drift = audit_log.score_drift_summary(db_path, now=now)
+
+    assert drift["interpretation"] == "stable"
+    assert drift["psi"] < 0.1
+    assert drift["baseline_count"] == 20
+    assert drift["recent_count"] == 20
+
+
+def test_score_drift_summary_significant_shift_when_distributions_diverge(tmp_path):
+    db_path = str(tmp_path / "audit.db")
+    now = 1_700_000_000.0
+    recent_start = now - 7 * 86400
+    baseline_start = recent_start - 7 * 86400
+
+    # Baseline is all low scores; recent is all high scores -- a real drift.
+    for i in range(20):
+        _record_at(db_path, f"baseline_{i}", 0.05, baseline_start + i * 60)
+        _record_at(db_path, f"recent_{i}", 0.95, recent_start + i * 60)
+
+    drift = audit_log.score_drift_summary(db_path, now=now)
+
+    assert drift["interpretation"] == "significant_shift"
+    assert drift["psi"] >= 0.25
+    low_decile = next(d for d in drift["deciles"] if d["score_decile"] == 0)
+    high_decile = next(d for d in drift["deciles"] if d["score_decile"] == 9)
+    assert low_decile["baseline_pct"] == 100.0
+    assert high_decile["recent_pct"] == 100.0
+
+
+def test_score_drift_summary_insufficient_data_when_windows_empty(tmp_path):
+    db_path = str(tmp_path / "audit.db")
+    audit_log.connect(db_path).close()
+
+    drift = audit_log.score_drift_summary(db_path)
+
+    assert drift["interpretation"] == "insufficient_data"
+    assert drift["baseline_count"] == 0
+    assert drift["recent_count"] == 0

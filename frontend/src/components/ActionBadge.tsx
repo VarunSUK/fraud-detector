@@ -1,4 +1,4 @@
-import type { DecisionAction, RiskTier } from "../types";
+import type { DecisionAction, DriftInterpretation, RiskTier } from "../types";
 
 const ACTION_LABELS: Record<DecisionAction, string> = {
   approve: "Approved",
@@ -12,4 +12,15 @@ export function ActionBadge({ action }: { action: DecisionAction }) {
 
 export function RiskBadge({ tier }: { tier: RiskTier }) {
   return <span className={`badge badge-risk-${tier}`}>{tier} risk</span>;
+}
+
+const DRIFT_LABELS: Record<DriftInterpretation, string> = {
+  stable: "Stable",
+  moderate_shift: "Moderate shift",
+  significant_shift: "Significant shift",
+  insufficient_data: "Insufficient data",
+};
+
+export function DriftBadge({ interpretation }: { interpretation: DriftInterpretation }) {
+  return <span className={`badge badge-drift-${interpretation}`}>{DRIFT_LABELS[interpretation] ?? interpretation}</span>;
 }

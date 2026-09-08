@@ -190,8 +190,9 @@ def test_analytics_summary_reflects_recorded_decisions(trained_models_dir, tmp_p
     resp = client.get("/analytics/summary")
     assert resp.status_code == 200
     body = resp.json()
-    assert "funnel" in body and "score_deciles" in body
+    assert "funnel" in body and "score_deciles" in body and "drift" in body
     assert sum(row["transaction_count"] for row in body["funnel"]) == 1
+    assert body["drift"]["interpretation"] in ("insufficient_data", "stable", "moderate_shift", "significant_shift")
 
 
 def test_to_creditcard_frame_maps_lowercase_fields_to_uppercase_columns():

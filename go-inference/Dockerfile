@@ -34,9 +34,11 @@ WORKDIR /app
 # Copy binary from builder stage
 COPY --from=builder /app/main .
 
-# Copy any additional files (models, configs, etc.)
-RUN mkdir -p models
-COPY --from=builder /app/models ./models
+# No models/ directory to copy: this service no longer reads model files
+# from local disk (MODELS_DIR is a vestigial config value, unused by
+# predictor.go) -- real models are loaded and served by the ml-serving
+# sidecar over HTTP. A COPY here used to reference a directory that never
+# existed in the repo, which broke this image's build outright.
 
 # Change ownership to appuser
 RUN chown -R appuser:appuser /app

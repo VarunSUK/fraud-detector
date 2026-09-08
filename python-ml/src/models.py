@@ -5,7 +5,7 @@ Includes class imbalance handling and feature engineering.
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.metrics import (
     classification_report, confusion_matrix, roc_auc_score,
@@ -17,9 +17,6 @@ from sklearn.ensemble import IsolationForest
 import lightgbm as lgb
 import xgboost as xgb
 import shap
-from imblearn.over_sampling import SMOTE
-from imblearn.under_sampling import RandomUnderSampler
-from imblearn.pipeline import Pipeline as ImbPipeline
 import joblib
 import json
 import os

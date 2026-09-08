@@ -69,6 +69,25 @@ Create the name of the namespace
 {{- end }}
 
 {{/*
+Standard DNS egress rule, appended to every NetworkPolicy's egress list.
+Every pod needs to resolve service names even when everything else it can
+reach is locked down; kube-system is a label Kubernetes 1.21+ applies to
+every namespace automatically, so this doesn't depend on the DNS
+implementation's own pod labels (kube-dns vs CoreDNS vs a vendor's own).
+*/}}
+{{- define "fraud-detection.dnsEgress" -}}
+- to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+  ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+{{- end }}
+
+{{/*
 Create cloud provider specific annotations
 */}}
 {{- define "fraud-detection.cloudAnnotations" -}}

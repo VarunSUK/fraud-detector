@@ -56,7 +56,9 @@ metadata:
     {{- include "fraud-detection.labels" . | nindent 4 }}
     component: inference-api
 spec:
+  {{- if not .Values.inferenceAPI.autoscaling.enabled }}
   replicas: {{ .Values.inferenceAPI.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "fraud-detection.selectorLabels" . | nindent 6 }}
@@ -220,7 +222,9 @@ metadata:
     {{- include "fraud-detection.labels" . | nindent 4 }}
     component: frontend
 spec:
+  {{- if not .Values.frontend.autoscaling.enabled }}
   replicas: {{ .Values.frontend.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "fraud-detection.selectorLabels" . | nindent 6 }}

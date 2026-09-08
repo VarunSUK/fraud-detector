@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for Python ML training pipeline
-FROM python:3.9-slim as base
+FROM python:3.12-slim AS base
 
 # Set working directory
 WORKDIR /app
@@ -20,10 +20,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY src/ ./src/
 COPY train.py .
-COPY notebooks/ ./notebooks/
 
-# Create directories for data and models
-RUN mkdir -p data models output
+# Create directories for data, models, and (if the development stage's
+# Jupyter server is used) notebooks. Not copied from the build context --
+# there's no notebooks/ directory checked into git to copy, and COPY of a
+# nonexistent path fails the build outright.
+RUN mkdir -p data models output notebooks
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash mluser && \
@@ -37,7 +39,7 @@ EXPOSE 8888
 CMD ["python", "train.py", "--help"]
 
 # Development stage
-FROM base as development
+FROM base AS development
 
 # Install development dependencies
 USER root
@@ -55,7 +57,7 @@ USER mluser
 CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root"]
 
 # Production stage
-FROM base as production
+FROM base AS production
 
 # Copy any additional production files
 COPY docker/entrypoint.sh .

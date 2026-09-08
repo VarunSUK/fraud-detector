@@ -8,13 +8,8 @@ numpy==2.2.6
 # Explainability (SHAP values for real per-transaction feature attribution)
 shap==0.48.0
 
-# Data processing
-imbalanced-learn==0.14.2
-feature-engine==1.6.2
-
 # Model serving and serialization
 joblib==1.5.2
-mlflow==2.8.1
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
 
@@ -22,23 +17,12 @@ uvicorn[standard]==0.35.0
 kafka-python==2.0.2
 redis==5.0.1
 
-# Monitoring and logging
-prometheus-client==0.19.0
-structlog==23.2.0
-
 # Development and testing
 pytest==7.4.3
 pytest-cov==4.1.0
 black==23.11.0
 flake8==6.1.0
 
-# Jupyter notebooks
-jupyter==1.0.0
-matplotlib==3.8.2
-seaborn==0.13.0
-plotly==5.17.0
-
-# Utilities
-python-dotenv==1.0.0
-pyyaml==6.0.1
-click==8.1.7
+# Jupyter itself is installed separately in the Dockerfile's development
+# stage (for ad hoc exploration); no plotting libraries or committed
+# notebooks exist yet, so they aren't pinned here -- see docs/ml-pipeline.md

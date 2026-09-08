@@ -14,6 +14,7 @@ demo-scale service -- not a throughput path worth optimizing.
 """
 
 import json
+import math
 import os
 import sqlite3
 import time
@@ -185,6 +186,88 @@ def score_decile_summary(db_path: Optional[str] = None) -> List[Dict]:
         return [dict(row) for row in rows]
     finally:
         conn.close()
+
+
+def _decile_counts(conn: sqlite3.Connection, start: float, end: float) -> Dict[int, int]:
+    rows = conn.execute(
+        """
+        SELECT CAST(MIN(fraud_score * 10, 9) AS INTEGER) AS score_decile, COUNT(*) AS n
+        FROM decisions
+        WHERE created_at >= ? AND created_at < ?
+        GROUP BY score_decile
+        """,
+        (start, end),
+    ).fetchall()
+    return {row["score_decile"]: row["n"] for row in rows}
+
+
+def score_drift_summary(
+    db_path: Optional[str] = None,
+    recent_days: int = 7,
+    baseline_days: int = 7,
+    now: Optional[float] = None,
+) -> Dict:
+    """Population Stability Index (PSI) between a recent window and the
+    baseline window immediately before it, bucketed by score decile. PSI is
+    the standard metric credit risk teams use to monitor score drift: it
+    doesn't need ground-truth fraud labels (unlike score_decile_summary),
+    so it can run continuously against live scoring traffic, not just
+    resolved cases.
+
+    PSI < 0.1 : stable
+    PSI < 0.25: moderate shift, worth investigating
+    PSI >= 0.25: significant shift -- the scored population has changed
+                 enough that the model's calibration may no longer hold.
+    """
+    now = now if now is not None else time.time()
+    recent_start = now - recent_days * 86400
+    baseline_start = recent_start - baseline_days * 86400
+
+    conn = connect(db_path)
+    try:
+        recent_counts = _decile_counts(conn, recent_start, now)
+        baseline_counts = _decile_counts(conn, baseline_start, recent_start)
+    finally:
+        conn.close()
+
+    recent_total = sum(recent_counts.values())
+    baseline_total = sum(baseline_counts.values())
+
+    deciles = []
+    psi = 0.0
+    epsilon = 1e-4  # avoids log(0) / division by zero for empty buckets
+
+    for decile in range(10):
+        recent_pct = recent_counts.get(decile, 0) / recent_total if recent_total else 0.0
+        baseline_pct = baseline_counts.get(decile, 0) / baseline_total if baseline_total else 0.0
+        r = max(recent_pct, epsilon)
+        b = max(baseline_pct, epsilon)
+        contribution = (r - b) * math.log(r / b)
+        psi += contribution
+        deciles.append(
+            {
+                "score_decile": decile,
+                "baseline_pct": round(baseline_pct * 100, 2),
+                "recent_pct": round(recent_pct * 100, 2),
+            }
+        )
+
+    if baseline_total == 0 or recent_total == 0:
+        interpretation = "insufficient_data"
+    elif psi < 0.1:
+        interpretation = "stable"
+    elif psi < 0.25:
+        interpretation = "moderate_shift"
+    else:
+        interpretation = "significant_shift"
+
+    return {
+        "psi": round(psi, 4),
+        "interpretation": interpretation,
+        "baseline_count": baseline_total,
+        "recent_count": recent_total,
+        "deciles": deciles,
+    }
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict:

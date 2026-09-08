@@ -1,0 +1,41 @@
+# Argo CD Application for this repo's Helm chart. Not auto-applied by
+# anything here -- this is what "GitOps ready" actually means for this
+# project: a real Application CR you can apply to a cluster that already
+# has Argo CD installed, not just a claim in a README.
+#
+#   kubectl apply -n argocd -f argocd/application.yaml
+#
+# Argo CD will then reconcile the cluster to whatever's in helm/fraud-detection
+# on the targetRevision branch, and re-sync automatically on every push.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fraud-detection
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/VarunSUK/fraud-detector.git
+    targetRevision: main
+    path: helm/fraud-detection
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-aws.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: fraud-detection
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

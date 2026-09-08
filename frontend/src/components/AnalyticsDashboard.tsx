@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getAnalyticsSummary } from "../api";
 import type { AnalyticsSummary } from "../types";
+import { DriftBadge } from "./ActionBadge";
 
 const ACTION_COLORS: Record<string, string> = {
   approve: "#2e7d46",
@@ -98,6 +99,49 @@ export function AnalyticsDashboard() {
         Deciles bucket the fraud score into [0.0-0.1) ... [0.9-1.0]. Fraud rate should rise with decile;
         a decile out of order (or a low decile with meaningfully nonzero fraud) is a calibration
         red flag worth investigating before leaning on the score for policy.
+      </p>
+
+      <h3>
+        Score drift <DriftBadge interpretation={summary.drift.interpretation} />
+      </h3>
+      {summary.drift.interpretation === "insufficient_data" ? (
+        <p className="muted">
+          Not enough history yet to compare a recent window against a baseline window. Run{" "}
+          <code>scripts/seed_audit_log.py</code> with a longer <code>--days-of-history</code>, or wait for
+          more live traffic.
+        </p>
+      ) : (
+        <>
+          <div className="drift-legend">
+            <span>
+              <span className="drift-legend-swatch" style={{ background: "#9aa5b5" }} />
+              baseline ({summary.drift.baseline_count})
+            </span>
+            <span>
+              <span className="drift-legend-swatch" style={{ background: "#4a63d6" }} />
+              recent ({summary.drift.recent_count})
+            </span>
+            <span>PSI {summary.drift.psi}</span>
+          </div>
+          <div className="drift-chart">
+            {summary.drift.deciles.map((row) => (
+              <div className="drift-bar-container" key={row.score_decile}>
+                <div className="drift-bar-pair">
+                  <div className="drift-bar-baseline" style={{ height: `${Math.max(row.baseline_pct, 1)}%` }} />
+                  <div className="drift-bar-recent" style={{ height: `${Math.max(row.recent_pct, 1)}%` }} />
+                </div>
+                <span className="decile-label">{row.score_decile}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <p className="muted small">
+        Population Stability Index between the last 7 days and the 7 days before that, bucketed by score
+        decile. Below 0.1 is stable, 0.1 to 0.25 is a moderate shift worth investigating, above 0.25 is
+        significant enough that the model's calibration may no longer hold against the incoming
+        transaction population. This does not need fraud labels, unlike the decile chart above it, so
+        it can run continuously against live traffic.
       </p>
     </div>
   );

@@ -1,0 +1,48 @@
+groups:
+  - name: fraud-detection-inference
+    rules:
+      - alert: InferenceServiceDown
+        expr: up{job="fraud-detection-inference"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fraud detection inference API is down"
+          description: "Prometheus has not been able to scrape {{ $labels.instance }} for 1 minute."
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(fraud_detection_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(fraud_detection_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated 5xx rate on the inference API"
+          description: "More than 5 percent of requests over the last 5 minutes returned a 5xx status. Check whether the ml-serving sidecar is reachable (GET /health on both services)."
+
+      - alert: HighScoringLatencyP95
+        expr: |
+          histogram_quantile(0.95, sum(rate(fraud_detection_request_duration_seconds_bucket{endpoint="score"}[5m])) by (le))
+          > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 scoring latency above 200ms"
+          description: "The documented ensemble benchmark is roughly 50ms at p95. Sustained latency above 200ms usually means the ml-serving sidecar or its health check cache is degraded, not the Go service itself."
+
+      - alert: FraudRateSpike
+        expr: |
+          sum(rate(fraud_detection_predictions_total{prediction="1"}[15m]))
+          /
+          sum(rate(fraud_detection_predictions_total[15m]))
+          > 0.20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Predicted fraud rate above 20 percent over 15 minutes"
+          description: "Either a genuine attack pattern or the model is misbehaving, for example the rule-based fallback firing broadly because ml-serving is unreachable. Cross-check analytics/sql/approval_funnel.sql before treating this as confirmed fraud."

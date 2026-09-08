@@ -57,6 +57,14 @@ A weighted average of calibrated probabilities and the (uncalibrated) anomaly sc
 
 `credit_decisioning.py`'s `decide()` is a rule-based policy layer on top of the ensemble score -- not a model. Score cutoffs (`REVIEW_THRESHOLD=0.45`, `DECLINE_THRESHOLD=0.85`) are starting points, not tuned constants; `analytics/sql/threshold_tradeoff.sql` is how you'd actually size a change to them against realized outcomes before pushing it. The policy also reacts to `amount` (large transactions get a lower review bar) and `account.delinquent_payments_count` (tightens both thresholds and the credit-limit recommendation). See [docs/api-reference.md](./api-reference.md#post-apiv1decision) for the request/response shape.
 
+## Model Drift Detection
+
+`audit_log.score_drift_summary()` computes the Population Stability Index (PSI) between a recent scoring window (default: last 7 days) and the baseline window immediately before it (default: the 7 days before that), bucketed by score decile. PSI is the standard metric credit risk teams use for this, for one specific reason: it doesn't need ground-truth fraud labels, unlike `score_decile_summary()`'s fraud-rate-by-decile view, which can only score transactions once an analyst or the seed script has resolved them. That means drift detection can run continuously against live, unlabeled scoring traffic, while the fraud-rate view is necessarily always a few steps behind.
+
+Thresholds follow the standard PSI convention: below 0.1 is stable, 0.1 to 0.25 is a moderate shift worth investigating, at or above 0.25 is significant enough that the model's calibration may no longer hold against the transaction population it's actually seeing. This says nothing about whether the model got *worse* at detecting fraud, only that the input distribution changed -- worth remembering before treating a PSI alert as "the model broke."
+
+Exposed live at `GET /api/v1/analytics/summary`'s `drift` field, and rendered on the frontend's Analytics tab.
+
 ## Why analytics isn't just another API
 
 `analytics/sql/*.sql` (threshold trade-off, review queue aging) are deliberately *not* wrapped as API endpoints, unlike the funnel/decile summary which is (`/api/v1/analytics/summary`, for the dashboard). The distinction: the dashboard needs a small, stable set of pre-aggregated numbers refreshed on every page load; ad hoc risk analysis needs the actual SQL in front of an analyst who might change the threshold list, add a cohort filter, or join in a new column next week. Wrapping every possible query as an endpoint would mean shipping a query builder; running `analytics/run_report.py` against the real database is simpler and more honest about what it is.

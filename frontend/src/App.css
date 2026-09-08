@@ -183,6 +183,60 @@ input {
 .badge-risk-medium { background: #fdf3d9; color: #8a6600; }
 .badge-risk-high { background: #fbe9e7; color: #a3271b; }
 
+.badge-drift-stable { background: #e5f3ea; color: #1e6b3a; }
+.badge-drift-moderate_shift { background: #fdf3d9; color: #8a6600; }
+.badge-drift-significant_shift { background: #fbe9e7; color: #a3271b; }
+.badge-drift-insufficient_data { background: #eef1f6; color: #5a6474; }
+
+.drift-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 120px;
+  margin-bottom: 8px;
+  padding-top: 10px;
+  border-bottom: 1px solid #dde2ea;
+}
+
+.drift-bar-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 2px;
+}
+
+.drift-bar-pair {
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.drift-bar-baseline { background: #9aa5b5; border-radius: 2px 2px 0 0; width: 40%; min-height: 1px; }
+.drift-bar-recent { background: #4a63d6; border-radius: 2px 2px 0 0; width: 40%; min-height: 1px; }
+
+.drift-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 0.75rem;
+  color: #5a6474;
+  margin-bottom: 8px;
+}
+
+.drift-legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
 .narrative {
   background: #f7f9fc;
   border-left: 3px solid #3b5bdb;

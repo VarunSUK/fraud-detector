@@ -88,9 +88,26 @@ export interface ScoreDecileRow {
   fraud_rate_pct: number;
 }
 
+export interface DriftDecileRow {
+  score_decile: number;
+  baseline_pct: number;
+  recent_pct: number;
+}
+
+export type DriftInterpretation = "insufficient_data" | "stable" | "moderate_shift" | "significant_shift";
+
+export interface DriftSummary {
+  psi: number;
+  interpretation: DriftInterpretation;
+  baseline_count: number;
+  recent_count: number;
+  deciles: DriftDecileRow[];
+}
+
 export interface AnalyticsSummary {
   funnel: FunnelRow[];
   score_deciles: ScoreDecileRow[];
+  drift: DriftSummary;
 }
 
 export interface HealthResponse {

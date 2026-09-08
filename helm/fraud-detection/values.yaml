@@ -96,6 +96,14 @@ inferenceAPI:
     tag: "latest"
     pullPolicy: IfNotPresent
   replicaCount: 3
+  # replicaCount above is the starting point the HPA scales from; it only
+  # takes effect when autoscaling.enabled is false, otherwise the HPA owns
+  # the replica count.
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
   service:
     type: ClusterIP
     port: 8080
@@ -234,6 +242,11 @@ frontend:
     tag: "latest"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
   service:
     type: ClusterIP
     port: 80
@@ -402,6 +415,12 @@ monitoring:
         - secretName: grafana-tls
           hosts:
             - grafana.example.com
+
+# NetworkPolicies for this chart's own workloads (inference-api, ml-serving,
+# frontend, data-generator). See templates/networkpolicy.yaml for exactly
+# what's restricted and why ml-training and the ingress path are left alone.
+networkPolicy:
+  enabled: true
 
 # Persistent Volumes
 persistence:

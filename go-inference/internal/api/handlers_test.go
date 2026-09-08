@@ -258,7 +258,14 @@ func fakeMLServiceServer(t *testing.T) *httptest.Server {
 		case r.URL.Path == "/analytics/summary":
 			w.Write([]byte(`{
 				"funnel": [{"action": "approve", "transaction_count": 10, "pct_of_volume": 100, "total_amount": 500, "avg_fraud_score": 0.1}],
-				"score_deciles": [{"score_decile": 0, "transaction_count": 10, "confirmed_fraud_count": 0, "fraud_rate_pct": 0}]
+				"score_deciles": [{"score_decile": 0, "transaction_count": 10, "confirmed_fraud_count": 0, "fraud_rate_pct": 0}],
+				"drift": {
+					"psi": 0.03,
+					"interpretation": "stable",
+					"baseline_count": 100,
+					"recent_count": 110,
+					"deciles": [{"score_decile": 0, "baseline_pct": 80.0, "recent_pct": 78.0}]
+				}
 			}`))
 		default:
 			http.NotFound(w, r)
@@ -358,6 +365,13 @@ func TestAnalyticsSummaryHandler_Success(t *testing.T) {
 	funnel, ok := resp["funnel"].([]interface{})
 	if !ok || len(funnel) != 1 {
 		t.Errorf("funnel = %v, want 1 row", resp["funnel"])
+	}
+	drift, ok := resp["drift"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("drift = %v, want an object", resp["drift"])
+	}
+	if drift["interpretation"] != "stable" {
+		t.Errorf("drift.interpretation = %v, want stable", drift["interpretation"])
 	}
 }
 

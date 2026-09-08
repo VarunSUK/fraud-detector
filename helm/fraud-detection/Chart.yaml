@@ -9,12 +9,12 @@ keywords:
   - machine-learning
   - kubernetes
   - mlops
-home: https://github.com/your-org/fraud-detection
+home: https://github.com/VarunSUK/fraud-detector
 sources:
-  - https://github.com/your-org/fraud-detection
+  - https://github.com/VarunSUK/fraud-detector
 maintainers:
-  - name: Your Name
-    email: your.email@example.com
+  - name: VarunSUK
+    email: thicboiz@gmail.com
 dependencies:
   - name: kafka
     version: "22.1.5"
